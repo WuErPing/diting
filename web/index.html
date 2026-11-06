@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>谛听 · 本地语音记录</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="masthead">
+      <div class="identity">
+        <div class="seal" aria-hidden="true">听</div>
+        <div>
+          <p class="eyebrow">LOCAL SPEECH ARCHIVE</p>
+          <h1>谛听</h1>
+          <p class="tagline">只留人声，字字有时。</p>
+        </div>
+      </div>
+      <div class="connection" id="connection" role="status">
+        <span class="connection-dot" aria-hidden="true"></span>
+        <span id="connectionText">正在连接</span>
+      </div>
+    </header>
+
+    <main class="console">
+      <aside class="control-column" aria-label="监听控制">
+        <section class="listener-panel" aria-labelledby="listenerTitle">
+          <div class="on-air">
+            <span class="status-dot" id="statusDot" aria-hidden="true"></span>
+            <span id="stateLabel">准备中</span>
+          </div>
+          <h2 id="listenerTitle">静候人声</h2>
+          <p class="state-hint" id="stateHint">启动后，只有检测到说话时才保存录音。</p>
+          <button class="primary-button" id="toggleButton" type="button" disabled>开始聆听</button>
+          <p class="error-message" id="errorMessage" role="alert" hidden></p>
+        </section>
+
+        <section class="session-panel" aria-labelledby="sessionTitle">
+          <h2 id="sessionTitle">本次监听</h2>
+          <dl class="stats">
+            <div><dt>持续</dt><dd id="uptime">00:00:00</dd></div>
+            <div><dt>存入</dt><dd><span id="segmentCount">0</span> 段</dd></div>
+            <div><dt>丢帧</dt><dd><span id="droppedChunks">0</span> 块</dd></div>
+          </dl>
+          <p class="technical-note">16 kHz&nbsp;&nbsp;·&nbsp;&nbsp;MONO&nbsp;&nbsp;·&nbsp;&nbsp;ON DEVICE</p>
+        </section>
+
+        <section class="privacy-panel" aria-labelledby="privacyTitle">
+          <h2 id="privacyTitle">声音不出本机</h2>
+          <p>检测、识别和保存都在这台电脑上完成。临时文字会随识别变化，语句结束后才写入记录。</p>
+        </section>
+      </aside>
+
+      <section class="transcript-panel" aria-labelledby="liveTitle">
+        <div class="transcript-header">
+          <div>
+            <p class="eyebrow">LIVE TRANSCRIPT</p>
+            <h2 id="liveTitle">此刻</h2>
+          </div>
+          <button class="text-button" id="refreshButton" type="button">刷新记录</button>
+        </div>
+
+        <div class="live-now" aria-label="当前识别文本">
+          <span class="live-marker" aria-hidden="true">NOW</span>
+          <p id="interimText">正在连接本地服务…</p>
+          <span class="live-time" id="liveTime"></span>
+        </div>
+
+        <div class="history-header">
+          <h2>声音记录</h2>
+          <span>最新在前</span>
+        </div>
+        <div class="empty-state" id="emptyState">
+          <p>还没有人声记录</p>
+          <span>开始聆听并说几句话，完成的语句会出现在这里。</span>
+        </div>
+        <ol class="timeline" id="segmentList"></ol>
+        <button class="load-more" id="loadMoreButton" type="button" hidden>查看更早记录</button>
+      </section>
+    </main>
+
+    <footer>
+      <span>流式识别 · Silero VAD · 本地持久化</span>
+      <span>录音与文本保存在运行目录的 data 中</span>
+    </footer>
+  </div>
+
+  <template id="segmentTemplate">
+    <li class="segment-item">
+      <div class="timeline-node" aria-hidden="true"></div>
+      <div class="segment-meta">
+        <time class="segment-time"></time>
+        <span class="segment-duration"></span>
+      </div>
+      <p class="segment-text"></p>
+      <div class="segment-actions">
+        <audio controls preload="none"></audio>
+        <a class="download-link" download>下载 WAV</a>
+      </div>
+    </li>
+  </template>
+</body>
+</html>
