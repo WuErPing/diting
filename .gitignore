@@ -3,5 +3,8 @@
 /data/
 /dist/
 /test-results/
+/coverage.out
+*.test
+*.prof
 *.log
 .DS_Store
