@@ -80,7 +80,8 @@ func (s *captureSession) run() {
 	}
 
 	if current != nil {
-		tail := make([]float32, SampleRate*4/5)
+		// Slightly longer than MinSilenceDuration so the last segment can end naturally.
+		tail := make([]float32, SampleRate*12/10)
 		s.stream.AcceptWaveform(SampleRate, tail)
 		s.vad.AcceptWaveform(tail)
 		s.decode()
@@ -147,6 +148,7 @@ func (s *captureSession) finishReady(current *utterance) *utterance {
 			s.engine.setError(err)
 		} else {
 			s.engine.segmentSaved()
+			s.engine.notifySegment(saved)
 			s.engine.publish(Event{Type: "segment", Segment: saved})
 		}
 		s.recognizer.Reset(s.stream)

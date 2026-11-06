@@ -16,29 +16,36 @@ import (
 	"time"
 
 	"diting/internal/engine"
+	"diting/internal/paragraph"
 	"diting/internal/store"
 )
 
 var segmentIDPattern = regexp.MustCompile(`^\d{8}-\d{6}\.\d{9}$`)
 
 type Server struct {
-	engine *engine.Engine
-	store  *store.Store
-	hub    *eventHub
-	mux    *http.ServeMux
+	engine     *engine.Engine
+	store      *store.Store
+	paragraphs *paragraph.Store
+	merge      bool
+	hub        *eventHub
+	mux        *http.ServeMux
 }
 
-func New(ctx context.Context, recognizer *engine.Engine, segmentStore *store.Store, assets fs.FS) *Server {
+func New(ctx context.Context, recognizer *engine.Engine, segmentStore *store.Store,
+	paragraphs *paragraph.Store, merge bool, assets fs.FS) *Server {
 	s := &Server{
-		engine: recognizer,
-		store:  segmentStore,
-		hub:    newEventHub(ctx, recognizer.Events()),
-		mux:    http.NewServeMux(),
+		engine:     recognizer,
+		store:      segmentStore,
+		paragraphs: paragraphs,
+		merge:      merge,
+		hub:        newEventHub(ctx, recognizer.Events()),
+		mux:        http.NewServeMux(),
 	}
 	s.mux.HandleFunc("GET /api/status", s.handleStatus)
 	s.mux.HandleFunc("PUT /api/capture", s.handleCapture)
 	s.mux.HandleFunc("GET /api/segments", s.handleSegments)
 	s.mux.HandleFunc("GET /api/segments/{id}/audio", s.handleAudio)
+	s.mux.HandleFunc("GET /api/markdown", s.handleMarkdown)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
 	if assets != nil {
 		s.mux.Handle("GET /", http.FileServer(http.FS(assets)))
@@ -52,6 +59,29 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) Close() {
 	s.hub.Close()
+}
+
+type paragraphEvent struct {
+	ID           string    `json:"id"`
+	StartedAt    time.Time `json:"startedAt"`
+	EndedAt      time.Time `json:"endedAt"`
+	Speaker      string    `json:"speaker,omitempty"`
+	SegmentCount int       `json:"segmentCount"`
+	Source       string    `json:"source"`
+}
+
+func (s *Server) PublishParagraph(p paragraph.Paragraph) {
+	if s.hub == nil {
+		return
+	}
+	s.hub.publish(sseEvent{Type: "paragraph", Data: paragraphEvent{
+		ID:           p.ID,
+		StartedAt:    p.StartedAt,
+		EndedAt:      p.EndedAt,
+		Speaker:      p.Speaker,
+		SegmentCount: p.SegmentCount(),
+		Source:       p.Source,
+	}})
 }
 
 type statusResponse struct {
@@ -191,16 +221,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			var data any
-			switch event.Type {
-			case "interim":
-				data = event.Interim
-			case "segment":
-				data = event.Segment
-			default:
-				data = event.Status
-			}
-			if err := writeSSE(w, event.Type, data); err != nil {
+			if err := writeSSE(w, event.Type, event.Data); err != nil {
 				return
 			}
 			flusher.Flush()

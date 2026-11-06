@@ -99,7 +99,7 @@ func NewVAD(paths ModelPaths) (*sherpa.VoiceActivityDetector, error) {
 	config := sherpa.VadModelConfig{}
 	config.SileroVad.Model = paths.VAD
 	config.SileroVad.Threshold = 0.5
-	config.SileroVad.MinSilenceDuration = 0.6
+	config.SileroVad.MinSilenceDuration = 1.0
 	config.SileroVad.MinSpeechDuration = 0.25
 	config.SileroVad.WindowSize = 512
 	config.SileroVad.MaxSpeechDuration = 30

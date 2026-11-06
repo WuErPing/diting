@@ -18,6 +18,7 @@ import (
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/v2/sherpa_onnx"
 
 	"diting/internal/engine"
+	"diting/internal/paragraph"
 	"diting/internal/server"
 	"diting/internal/store"
 	"diting/web"
@@ -32,6 +33,10 @@ type config struct {
 	retranscribe     bool
 	speakerModel     string
 	speakerThreshold float64
+	llmURL           string
+	llmModel         string
+	merge            bool
+	reparagraph      bool
 }
 
 func main() {
@@ -44,6 +49,10 @@ func main() {
 	flag.BoolVar(&cfg.retranscribe, "retranscribe", false, "re-run all saved records with the current models and exit")
 	flag.StringVar(&cfg.speakerModel, "speaker-model", "", "speaker embedding model (default: <models>/"+engine.SpeakerModelName+")")
 	flag.Float64Var(&cfg.speakerThreshold, "speaker-threshold", 0.45, "cosine threshold for speaker matching")
+	flag.StringVar(&cfg.llmURL, "llm-url", paragraph.DefaultBaseURL, "LM Studio OpenAI-compatible base URL (loopback only)")
+	flag.StringVar(&cfg.llmModel, "llm-model", paragraph.DefaultModel, "LM Studio model used to split paragraphs")
+	flag.BoolVar(&cfg.merge, "merge", true, "merge consecutive same-speaker segments into paragraphs")
+	flag.BoolVar(&cfg.reparagraph, "reparagraph", false, "rebuild paragraphs from existing transcripts and exit")
 	flag.Parse()
 
 	if cfg.speakerModel == "" {
@@ -62,8 +71,16 @@ func run(cfg config) error {
 	if cfg.retranscribe {
 		return retranscribe(cfg)
 	}
+	if cfg.reparagraph {
+		return reparagraph(cfg)
+	}
 	if err := validateListenAddress(cfg.listen); err != nil {
 		return err
+	}
+	if cfg.merge {
+		if err := paragraph.ValidateBaseURL(cfg.llmURL); err != nil {
+			return err
+		}
 	}
 
 	segmentStore, err := store.Open(cfg.data)
@@ -72,7 +89,29 @@ func run(cfg config) error {
 	}
 	defer segmentStore.Close()
 
-	recognizer, err := engine.New(modelPaths(cfg), segmentStore, engineOptions(cfg))
+	var paragraphStore *paragraph.Store
+	var worker *paragraph.Worker
+	var client *paragraph.Client
+	if cfg.merge {
+		paragraphStore, err = paragraph.Open(cfg.data)
+		if err != nil {
+			return err
+		}
+		client = paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, Model: cfg.llmModel})
+		worker = paragraph.NewWorker(paragraph.WorkerOptions{
+			Store:    paragraphStore,
+			Segments: segmentStore,
+			Grouper:  client,
+			Model:    cfg.llmModel,
+		})
+		defer worker.Close()
+	}
+
+	options := engineOptions(cfg)
+	if worker != nil {
+		options.OnSegment = worker.Notify
+	}
+	recognizer, err := engine.New(modelPaths(cfg), segmentStore, options)
 	if err != nil {
 		return err
 	}
@@ -80,8 +119,20 @@ func run(cfg config) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	console := server.New(ctx, recognizer, segmentStore, web.Files)
+	console := server.New(ctx, recognizer, segmentStore, paragraphStore, cfg.merge, web.Files)
 	defer console.Close()
+
+	if worker != nil {
+		worker.SetOnParagraph(console.PublishParagraph)
+		worker.Start(ctx)
+		go func() {
+			if err := client.Check(ctx); err != nil {
+				log.Printf("LM Studio 暂不可用，段落将先按整段拼接: %v", err)
+				return
+			}
+			log.Printf("段落合并模型: %s", cfg.llmModel)
+		}()
+	}
 
 	listener, err := net.Listen("tcp", cfg.listen)
 	if err != nil {
@@ -111,6 +162,11 @@ func run(cfg config) error {
 	}
 
 	recognizer.Stop()
+	if worker != nil {
+		if err := worker.Close(); err != nil {
+			log.Printf("关闭段落合并器: %v", err)
+		}
+	}
 	console.Close()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -212,5 +268,75 @@ func retranscribe(cfg config) error {
 	}
 	fmt.Printf("重新转写完成: 总数=%d 更新=%d 缺少录音=%d 无文本=%d\n", stats.Total, stats.Updated, stats.MissingAudio, stats.EmptyText)
 	fmt.Printf("原记录已备份到 %s\n", filepath.Join(cfg.data, "transcripts.jsonl.bak"))
+
+	paragraphStore, err := paragraph.Open(cfg.data)
+	if err != nil {
+		return err
+	}
+	if err := paragraphStore.Reset(); err != nil {
+		return err
+	}
+	if !cfg.merge {
+		fmt.Println("段落缓存已清空（-merge=false）")
+		return nil
+	}
+	if err := paragraph.ValidateBaseURL(cfg.llmURL); err != nil {
+		return err
+	}
+	segments, err := segmentStore.All()
+	if err != nil {
+		return err
+	}
+	client := paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, Model: cfg.llmModel})
+	rebuildStats, err := paragraph.Rebuild(context.Background(), paragraphStore, segments, client,
+		cfg.llmModel, paragraph.RunOptions{}, nil, progressPrinter("段落重建"))
+	if err != nil {
+		return err
+	}
+	printRebuildStats(rebuildStats)
 	return nil
+}
+
+func reparagraph(cfg config) error {
+	if !cfg.merge {
+		return fmt.Errorf("-reparagraph 需要 -merge=true")
+	}
+	if err := paragraph.ValidateBaseURL(cfg.llmURL); err != nil {
+		return err
+	}
+	segmentStore, err := store.Open(cfg.data)
+	if err != nil {
+		return err
+	}
+	defer segmentStore.Close()
+
+	paragraphStore, err := paragraph.Open(cfg.data)
+	if err != nil {
+		return err
+	}
+	segments, err := segmentStore.All()
+	if err != nil {
+		return err
+	}
+	client := paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, Model: cfg.llmModel})
+	stats, err := paragraph.Rebuild(context.Background(), paragraphStore, segments, client,
+		cfg.llmModel, paragraph.RunOptions{}, nil, progressPrinter("段落重建"))
+	if err != nil {
+		return err
+	}
+	printRebuildStats(stats)
+	return nil
+}
+
+func progressPrinter(label string) func(done, total int) {
+	return func(done, total int) {
+		if done%20 == 0 || done == total {
+			log.Printf("%s %d/%d", label, done, total)
+		}
+	}
+}
+
+func printRebuildStats(stats paragraph.RebuildStats) {
+	fmt.Printf("段落重建完成: run=%d 模型=%d 单段=%d 回退=%d 段落=%d\n",
+		stats.Runs, stats.LLM, stats.Single, stats.Fallback, stats.Paragraphs)
 }

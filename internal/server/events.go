@@ -7,15 +7,20 @@ import (
 	"diting/internal/engine"
 )
 
+type sseEvent struct {
+	Type string
+	Data any
+}
+
 type eventHub struct {
 	mu      sync.Mutex
-	clients map[chan engine.Event]struct{}
+	clients map[chan sseEvent]struct{}
 	cancel  context.CancelFunc
 }
 
 func newEventHub(ctx context.Context, source <-chan engine.Event) *eventHub {
 	ctx, cancel := context.WithCancel(ctx)
-	hub := &eventHub{clients: make(map[chan engine.Event]struct{}), cancel: cancel}
+	hub := &eventHub{clients: make(map[chan sseEvent]struct{}), cancel: cancel}
 	go func() {
 		for {
 			select {
@@ -23,15 +28,26 @@ func newEventHub(ctx context.Context, source <-chan engine.Event) *eventHub {
 				hub.close()
 				return
 			case event := <-source:
-				hub.publish(event)
+				hub.publish(engineSSEEvent(event))
 			}
 		}
 	}()
 	return hub
 }
 
-func (h *eventHub) subscribe() (<-chan engine.Event, func()) {
-	client := make(chan engine.Event, 64)
+func engineSSEEvent(event engine.Event) sseEvent {
+	switch event.Type {
+	case "interim":
+		return sseEvent{Type: event.Type, Data: event.Interim}
+	case "segment":
+		return sseEvent{Type: event.Type, Data: event.Segment}
+	default:
+		return sseEvent{Type: event.Type, Data: event.Status}
+	}
+}
+
+func (h *eventHub) subscribe() (<-chan sseEvent, func()) {
+	client := make(chan sseEvent, 64)
 	h.mu.Lock()
 	h.clients[client] = struct{}{}
 	h.mu.Unlock()
@@ -48,7 +64,7 @@ func (h *eventHub) subscribe() (<-chan engine.Event, func()) {
 	}
 }
 
-func (h *eventHub) publish(event engine.Event) {
+func (h *eventHub) publish(event sseEvent) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for client := range h.clients {
@@ -67,7 +83,7 @@ func (h *eventHub) close() {
 	for client := range h.clients {
 		close(client)
 	}
-	h.clients = make(map[chan engine.Event]struct{})
+	h.clients = make(map[chan sseEvent]struct{})
 }
 
 func (h *eventHub) Close() {

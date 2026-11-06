@@ -47,6 +47,7 @@ type Event struct {
 type Options struct {
 	SpeakerRegistry  string
 	SpeakerThreshold float32
+	OnSegment        func(store.Segment) // must not block
 }
 
 type Engine struct {
@@ -65,6 +66,7 @@ type Engine struct {
 	events          chan Event
 	dropped         atomic.Uint64
 	speakerErrorOne sync.Once
+	onSegment       func(store.Segment)
 }
 
 func New(paths ModelPaths, segmentStore *store.Store, opts Options) (*Engine, error) {
@@ -84,6 +86,7 @@ func New(paths ModelPaths, segmentStore *store.Store, opts Options) (*Engine, er
 		refiner:    refiner,
 		status:     Status{State: StateStopped},
 		events:     make(chan Event, 256),
+		onSegment:  opts.OnSegment,
 	}
 	if opts.SpeakerRegistry != "" {
 		extractor, err := NewSpeakerExtractor(paths)
@@ -252,6 +255,18 @@ func (e *Engine) publish(event Event) {
 	case e.events <- event:
 	default:
 	}
+}
+
+func (e *Engine) notifySegment(segment store.Segment) {
+	if e.onSegment == nil {
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("段落合并通知失败: %v", recovered)
+		}
+	}()
+	e.onSegment(segment)
 }
 
 func (e *Engine) ProcessWAV(samples []float32) error {

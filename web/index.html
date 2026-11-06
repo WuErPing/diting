@@ -60,7 +60,10 @@
             <p class="eyebrow">LIVE TRANSCRIPT</p>
             <h2 id="liveTitle">此刻</h2>
           </div>
-          <button class="text-button" id="refreshButton" type="button">刷新记录</button>
+          <div class="transcript-actions">
+            <button class="text-button" id="showPreviewButton" type="button" hidden>显示文稿</button>
+            <button class="text-button" id="refreshButton" type="button">刷新记录</button>
+          </div>
         </div>
 
         <div class="live-now" aria-label="当前识别文本">
@@ -80,6 +83,27 @@
         <ol class="timeline" id="segmentList"></ol>
         <button class="load-more" id="loadMoreButton" type="button" hidden>查看更早记录</button>
       </section>
+
+      <aside class="preview-panel" id="previewPanel" aria-labelledby="previewTitle">
+        <div class="preview-header">
+          <div>
+            <p class="eyebrow">MARKDOWN</p>
+            <h2 id="previewTitle">合并文稿</h2>
+          </div>
+          <div class="preview-actions">
+            <a class="text-button" id="markdownDownload" href="/api/markdown?download=1" download>下载 .md</a>
+            <button class="icon-button" id="hidePreviewButton" type="button" aria-label="隐藏合并文稿预览" title="隐藏预览">×</button>
+          </div>
+        </div>
+        <p class="preview-note" id="previewNote">最近 500 条 · 本地生成</p>
+        <div class="markdown-scroll" id="markdownScroll">
+          <article class="markdown-body" id="markdownPreview"></article>
+          <div class="markdown-live" id="markdownLive" hidden>
+            <span class="markdown-live-label">此刻</span>
+            <p id="markdownLiveText"></p>
+          </div>
+        </div>
+      </aside>
     </main>
 
     <footer>

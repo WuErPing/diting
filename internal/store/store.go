@@ -113,6 +113,8 @@ func (s *Store) Save(segment Segment, samples []float32) (Segment, error) {
 }
 
 func (s *Store) All() ([]Segment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return readTranscripts(filepath.Join(s.root, transcriptFile))
 }
 
