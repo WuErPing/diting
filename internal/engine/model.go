@@ -8,12 +8,16 @@ import (
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/v2/sherpa_onnx"
 )
 
-const SampleRate = 16000
+const (
+	SampleRate       = 16000
+	SpeakerModelName = "3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx"
+)
 
 type ModelPaths struct {
 	ASRDir     string
 	OfflineDir string
 	VAD        string
+	Speaker    string
 }
 
 func DefaultModelPaths(root string) ModelPaths {
@@ -21,7 +25,21 @@ func DefaultModelPaths(root string) ModelPaths {
 		ASRDir:     filepath.Join(root, "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30"),
 		OfflineDir: filepath.Join(root, "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"),
 		VAD:        filepath.Join(root, "silero_vad.onnx"),
+		Speaker:    filepath.Join(root, SpeakerModelName),
 	}
+}
+
+func NewSpeakerExtractor(paths ModelPaths) (*sherpa.SpeakerEmbeddingExtractor, error) {
+	config := sherpa.SpeakerEmbeddingExtractorConfig{
+		Model:      paths.Speaker,
+		NumThreads: 2,
+		Provider:   "cpu",
+	}
+	extractor := sherpa.NewSpeakerEmbeddingExtractor(&config)
+	if extractor == nil {
+		return nil, fmt.Errorf("load speaker embedding model from %s", paths.Speaker)
+	}
+	return extractor, nil
 }
 
 func NewOfflineRecognizer(paths ModelPaths) (*sherpa.OfflineRecognizer, error) {

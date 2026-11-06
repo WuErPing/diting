@@ -101,6 +101,14 @@ function renderSegments() {
     time.dateTime = segment.startedAt;
     time.textContent = formatTime(segment.startedAt);
     item.querySelector(".segment-duration").textContent = formatDuration(segment.durationMs);
+    const speaker = item.querySelector(".segment-speaker");
+    if (segment.speaker) {
+      speaker.textContent = segment.speaker;
+      speaker.hidden = false;
+      const match = /(\d+)$/.exec(segment.speaker);
+      const color = match ? ((Number(match[1]) - 1) % 6) + 1 : 1;
+      speaker.classList.add(`speaker-${color}`);
+    }
     const text = item.querySelector(".segment-text");
     text.textContent = segment.text || "未识别出文字，录音已保留";
     text.classList.toggle("is-empty", !segment.text);

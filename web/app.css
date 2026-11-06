@@ -190,7 +190,15 @@ h1 {
 .segment-item::before { content: ""; position: absolute; left: 5px; top: 32px; bottom: -1px; width: 1px; background: var(--line); }
 .segment-item:last-child::before { display: none; }
 .timeline-node { position: absolute; left: 0; top: 29px; width: 11px; height: 11px; border: 2px solid var(--signal); border-radius: 50%; background: var(--bg); }
-.segment-meta { display: flex; gap: 16px; color: var(--muted); font-family: var(--utility); font-size: 11px; }
+.segment-meta { display: flex; align-items: center; gap: 16px; color: var(--muted); font-family: var(--utility); font-size: 11px; }
+.segment-speaker { padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; font-family: var(--body); font-size: 11px; color: var(--ink); }
+.segment-speaker[hidden] { display: none; }
+.segment-speaker.speaker-1 { color: #e8b45a; border-color: #e8b45a66; }
+.segment-speaker.speaker-2 { color: #80bcc7; border-color: #80bcc766; }
+.segment-speaker.speaker-3 { color: #9ecf9b; border-color: #9ecf9b66; }
+.segment-speaker.speaker-4 { color: #c4a7e7; border-color: #c4a7e766; }
+.segment-speaker.speaker-5 { color: #f0a08e; border-color: #f0a08e66; }
+.segment-speaker.speaker-6 { color: #8fb8f0; border-color: #8fb8f066; }
 .segment-duration::before { content: "· "; }
 .segment-text { margin: 10px 0 16px; font-size: 17px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
 .segment-text.is-empty { color: var(--muted); font-size: 14px; }

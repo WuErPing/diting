@@ -85,4 +85,4 @@ func (e *Engine) Start(ctx context.Context) error {
 
 ## Open Questions
 
-默认保留所有本地历史，不做自动清理；暂不区分说话人，不接入 LM Studio。历史录音不自动重新转写，避免覆盖原始记录。
+默认保留所有本地历史，不做自动清理；按 VAD 片段标注主导说话人（CAM++ 声纹中心持久化在 `data/speakers.json`），不接入 LM Studio。`-retranscribe` 可显式全量重跑历史录音，重写前自动备份 `transcripts.jsonl`，并保持 WAV 不变。

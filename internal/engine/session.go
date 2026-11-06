@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	preRollSamples   = SampleRate * 3 / 10
+	preRollSamples   = SampleRate / 2
 	maxSpeechSamples = SampleRate * 30
 )
 
@@ -28,6 +28,7 @@ type utterance struct {
 	id            string
 	startedAt     time.Time
 	preRoll       []float32
+	preRollStart  int64
 	lastText      string
 	speechSamples int
 }
@@ -39,6 +40,7 @@ func (s *captureSession) run() {
 
 	ring := make([]float32, 0, preRollSamples)
 	var current *utterance
+	var totalSamples int64
 	for samples := range s.pcm {
 		before := append([]float32(nil), ring...)
 		s.stream.AcceptWaveform(SampleRate, samples)
@@ -52,6 +54,7 @@ func (s *captureSession) run() {
 					id:            time.Now().Format("20060102-150405.000000000"),
 					startedAt:     time.Now().Add(-duration),
 					preRoll:       before,
+					preRollStart:  totalSamples - int64(len(before)),
 					speechSamples: len(samples),
 				}
 			} else {
@@ -67,9 +70,12 @@ func (s *captureSession) run() {
 			s.publishInterim(current)
 		}
 		current = s.finishReady(current)
+		totalSamples += int64(len(samples))
 		if current != nil && current.speechSamples >= maxSpeechSamples {
 			s.vad.Flush()
 			current = s.finishReady(current)
+			s.vad.Reset()
+			totalSamples = 0
 		}
 	}
 
@@ -116,15 +122,26 @@ func (s *captureSession) finishReady(current *utterance) *utterance {
 			}
 		}
 
-		samples := make([]float32, 0, len(current.preRoll)+len(segment.Samples))
-		samples = append(samples, current.preRoll...)
+		startedAt := current.startedAt
+		lead := 0
+		if len(current.preRoll) > 0 {
+			delta := segment.Start - current.preRollStart
+			if delta < 0 {
+				startedAt = startedAt.Add(-sampleDuration(int(-delta)))
+			}
+			lead = min(len(current.preRoll), max(0, int(delta)))
+		}
+		samples := make([]float32, 0, lead+len(segment.Samples))
+		samples = append(samples, current.preRoll[:lead]...)
 		samples = append(samples, segment.Samples...)
 		text := s.engine.refine(samples)
+		speakerLabel := s.engine.IdentifySamples(samples, sampleDuration(len(samples)))
 		saved, err := s.store.Save(store.Segment{
 			ID:        current.id,
-			StartedAt: current.startedAt,
-			EndedAt:   current.startedAt.Add(sampleDuration(len(samples))),
+			StartedAt: startedAt,
+			EndedAt:   startedAt.Add(sampleDuration(len(samples))),
 			Text:      text,
+			Speaker:   speakerLabel,
 		}, samples)
 		if err != nil {
 			s.engine.setError(err)

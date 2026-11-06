@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/v2/sherpa_onnx"
 
 	"diting/internal/audio"
+	"diting/internal/speaker"
 	"diting/internal/store"
 )
 
@@ -42,22 +44,30 @@ type Event struct {
 	Segment store.Segment
 }
 
+type Options struct {
+	SpeakerRegistry  string
+	SpeakerThreshold float32
+}
+
 type Engine struct {
 	paths      ModelPaths
 	store      *store.Store
 	recognizer *sherpa.OnlineRecognizer
 	refiner    *sherpa.OfflineRecognizer
+	speakerEx  *sherpa.SpeakerEmbeddingExtractor
+	speakers   *speaker.Registry
 
-	opMu    sync.Mutex
-	mu      sync.RWMutex
-	status  Status
-	capture *audio.Capture
-	session *captureSession
-	events  chan Event
-	dropped atomic.Uint64
+	opMu            sync.Mutex
+	mu              sync.RWMutex
+	status          Status
+	capture         *audio.Capture
+	session         *captureSession
+	events          chan Event
+	dropped         atomic.Uint64
+	speakerErrorOne sync.Once
 }
 
-func New(paths ModelPaths, segmentStore *store.Store) (*Engine, error) {
+func New(paths ModelPaths, segmentStore *store.Store, opts Options) (*Engine, error) {
 	recognizer, err := NewOnlineRecognizer(paths)
 	if err != nil {
 		return nil, err
@@ -67,14 +77,30 @@ func New(paths ModelPaths, segmentStore *store.Store) (*Engine, error) {
 		sherpa.DeleteOnlineRecognizer(recognizer)
 		return nil, err
 	}
-	return &Engine{
+	engine := &Engine{
 		paths:      paths,
 		store:      segmentStore,
 		recognizer: recognizer,
 		refiner:    refiner,
 		status:     Status{State: StateStopped},
 		events:     make(chan Event, 256),
-	}, nil
+	}
+	if opts.SpeakerRegistry != "" {
+		extractor, err := NewSpeakerExtractor(paths)
+		if err != nil {
+			log.Printf("说话人识别不可用，继续无标签运行: %v", err)
+		} else {
+			registry, err := speaker.Open(opts.SpeakerRegistry, extractor.Dim(), opts.SpeakerThreshold)
+			if err != nil {
+				log.Printf("说话人识别不可用，继续无标签运行: %v", err)
+				sherpa.DeleteSpeakerEmbeddingExtractor(extractor)
+			} else {
+				engine.speakerEx = extractor
+				engine.speakers = registry
+			}
+		}
+	}
+	return engine, nil
 }
 
 func (e *Engine) Events() <-chan Event {
@@ -155,8 +181,41 @@ func (e *Engine) Stop() {
 
 func (e *Engine) Close() {
 	e.Stop()
+	if e.speakers != nil {
+		if err := e.speakers.Save(); err != nil {
+			log.Printf("保存声纹注册表失败: %v", err)
+		}
+	}
+	if e.speakerEx != nil {
+		sherpa.DeleteSpeakerEmbeddingExtractor(e.speakerEx)
+	}
 	sherpa.DeleteOnlineRecognizer(e.recognizer)
 	sherpa.DeleteOfflineRecognizer(e.refiner)
+}
+
+func (e *Engine) RefineWAV(samples []float32) string {
+	return e.refine(samples)
+}
+
+func (e *Engine) IdentifySamples(samples []float32, duration time.Duration) string {
+	if e.speakerEx == nil || e.speakers == nil || len(samples) < SampleRate/2 {
+		return ""
+	}
+	stream := e.speakerEx.CreateStream()
+	defer sherpa.DeleteOnlineStream(stream)
+	stream.AcceptWaveform(SampleRate, samples)
+	stream.InputFinished()
+	if !e.speakerEx.IsReady(stream) {
+		return ""
+	}
+	embedding := e.speakerEx.Compute(stream)
+	if len(embedding) == 0 {
+		e.speakerErrorOne.Do(func() {
+			log.Printf("提取声纹失败，后续片段将不带说话人标签")
+		})
+		return ""
+	}
+	return e.speakers.Identify(embedding, duration)
 }
 
 func (e *Engine) refine(samples []float32) string {

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -22,33 +23,56 @@ import (
 	"diting/web"
 )
 
+type config struct {
+	models           string
+	data             string
+	listen           string
+	autostart        bool
+	verifyWAV        string
+	retranscribe     bool
+	speakerModel     string
+	speakerThreshold float64
+}
+
 func main() {
-	models := flag.String("models", "models", "model directory")
-	data := flag.String("data", "data", "recording and transcript directory")
-	listen := flag.String("listen", "127.0.0.1:8080", "loopback HTTP address")
-	autostart := flag.Bool("autostart", true, "start microphone on launch")
-	verifyWAV := flag.String("verify-wav", "", "verify recognition with a WAV file and exit")
+	cfg := config{}
+	flag.StringVar(&cfg.models, "models", "models", "model directory")
+	flag.StringVar(&cfg.data, "data", "data", "recording and transcript directory")
+	flag.StringVar(&cfg.listen, "listen", "127.0.0.1:8080", "loopback HTTP address")
+	flag.BoolVar(&cfg.autostart, "autostart", true, "start microphone on launch")
+	flag.StringVar(&cfg.verifyWAV, "verify-wav", "", "verify recognition with a WAV file and exit")
+	flag.BoolVar(&cfg.retranscribe, "retranscribe", false, "re-run all saved records with the current models and exit")
+	flag.StringVar(&cfg.speakerModel, "speaker-model", "", "speaker embedding model (default: <models>/"+engine.SpeakerModelName+")")
+	flag.Float64Var(&cfg.speakerThreshold, "speaker-threshold", 0.45, "cosine threshold for speaker matching")
 	flag.Parse()
 
-	if err := run(*models, *data, *listen, *autostart, *verifyWAV); err != nil {
+	if cfg.speakerModel == "" {
+		cfg.speakerModel = filepath.Join(cfg.models, engine.SpeakerModelName)
+	}
+	if err := run(cfg); err != nil {
 		log.Printf("启动失败: %v", err)
 		os.Exit(1)
 	}
 }
 
-func run(models, data, listen string, autostart bool, verifyWAV string) error {
-	if verifyWAV != "" {
-		return verify(models, data, verifyWAV)
+func run(cfg config) error {
+	if cfg.verifyWAV != "" {
+		return verify(cfg)
 	}
-	if err := validateListenAddress(listen); err != nil {
+	if cfg.retranscribe {
+		return retranscribe(cfg)
+	}
+	if err := validateListenAddress(cfg.listen); err != nil {
 		return err
 	}
 
-	segmentStore, err := store.Open(data)
+	segmentStore, err := store.Open(cfg.data)
 	if err != nil {
 		return err
 	}
-	recognizer, err := engine.New(engine.DefaultModelPaths(models), segmentStore)
+	defer segmentStore.Close()
+
+	recognizer, err := engine.New(modelPaths(cfg), segmentStore, engineOptions(cfg))
 	if err != nil {
 		return err
 	}
@@ -59,9 +83,9 @@ func run(models, data, listen string, autostart bool, verifyWAV string) error {
 	console := server.New(ctx, recognizer, segmentStore, web.Files)
 	defer console.Close()
 
-	listener, err := net.Listen("tcp", listen)
+	listener, err := net.Listen("tcp", cfg.listen)
 	if err != nil {
-		return fmt.Errorf("listen on %s: %w", listen, err)
+		return fmt.Errorf("listen on %s: %w", cfg.listen, err)
 	}
 	httpServer := &http.Server{
 		Handler:           console.Handler(),
@@ -73,12 +97,12 @@ func run(models, data, listen string, autostart bool, verifyWAV string) error {
 		serveErrors <- httpServer.Serve(listener)
 	}()
 
-	if autostart {
+	if cfg.autostart {
 		if err := recognizer.Start(); err != nil {
 			log.Printf("麦克风尚未启动: %v", err)
 		}
 	}
-	log.Printf("谛听控制台: http://%s", listen)
+	log.Printf("谛听控制台: http://%s", cfg.listen)
 
 	var serveErr error
 	select {
@@ -99,6 +123,19 @@ func run(models, data, listen string, autostart bool, verifyWAV string) error {
 	return nil
 }
 
+func modelPaths(cfg config) engine.ModelPaths {
+	paths := engine.DefaultModelPaths(cfg.models)
+	paths.Speaker = cfg.speakerModel
+	return paths
+}
+
+func engineOptions(cfg config) engine.Options {
+	return engine.Options{
+		SpeakerRegistry:  filepath.Join(cfg.data, "speakers.json"),
+		SpeakerThreshold: float32(cfg.speakerThreshold),
+	}
+}
+
 func validateListenAddress(address string) error {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
@@ -111,24 +148,27 @@ func validateListenAddress(address string) error {
 	return nil
 }
 
-func verify(models, data, verifyWAV string) error {
-	segmentStore, err := store.Open(data)
+func verify(cfg config) error {
+	segmentStore, err := store.Open(cfg.data)
 	if err != nil {
 		return err
 	}
-	recognizer, err := engine.New(engine.DefaultModelPaths(models), segmentStore)
+	defer segmentStore.Close()
+
+	recognizer, err := engine.New(modelPaths(cfg), segmentStore, engineOptions(cfg))
 	if err != nil {
 		return err
 	}
 	defer recognizer.Close()
 
-	wave := sherpa.ReadWave(verifyWAV)
+	wave := sherpa.ReadWave(cfg.verifyWAV)
 	if wave == nil {
-		return fmt.Errorf("read WAV %s", verifyWAV)
+		return fmt.Errorf("read WAV %s", cfg.verifyWAV)
 	}
 	if wave.SampleRate != engine.SampleRate {
 		return fmt.Errorf("WAV sample rate must be %d", engine.SampleRate)
 	}
+	refined := recognizer.RefineWAV(wave.Samples)
 	if err := recognizer.ProcessWAV(wave.Samples); err != nil {
 		return err
 	}
@@ -147,8 +187,30 @@ func verify(models, data, verifyWAV string) error {
 				finalCount++
 			}
 		default:
-			fmt.Printf("识别文本: %s\n录音文件: %s\n实时事件: %d 条 interim / %d 条 final\n", segments[0].Text, segments[0].AudioPath, interimCount, finalCount)
+			fmt.Printf("整段精校: %s\n识别文本: %s\n说话人: %s\n录音文件: %s\n实时事件: %d 条 interim / %d 条 final\n", refined, segments[0].Text, segments[0].Speaker, segments[0].AudioPath, interimCount, finalCount)
 			return nil
 		}
 	}
+}
+
+func retranscribe(cfg config) error {
+	segmentStore, err := store.Open(cfg.data)
+	if err != nil {
+		return err
+	}
+	defer segmentStore.Close()
+
+	recognizer, err := engine.New(modelPaths(cfg), segmentStore, engineOptions(cfg))
+	if err != nil {
+		return err
+	}
+	defer recognizer.Close()
+
+	stats, err := engine.RetranscribeAll(segmentStore, recognizer)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("重新转写完成: 总数=%d 更新=%d 缺少录音=%d 无文本=%d\n", stats.Total, stats.Updated, stats.MissingAudio, stats.EmptyText)
+	fmt.Printf("原记录已备份到 %s\n", filepath.Join(cfg.data, "transcripts.jsonl.bak"))
+	return nil
 }
