@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -134,6 +135,7 @@ func run(cfg config) error {
 
 	if worker != nil {
 		worker.SetOnParagraph(console.PublishParagraph)
+		worker.SetSpeakerResolver(recognizer.CanonicalSpeaker)
 		worker.Start(ctx)
 		go func() {
 			if err := client.Check(ctx); err != nil {
@@ -308,7 +310,7 @@ func retranscribe(cfg config) error {
 	}
 	client := paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, Model: cfg.llmModel})
 	rebuildStats, err := paragraph.Rebuild(context.Background(), paragraphStore, segments, client,
-		cfg.llmModel, paragraph.RunOptions{}, nil, progressPrinter("段落重建"))
+		cfg.llmModel, paragraph.RunOptions{}, nil, recognizer.CanonicalSpeaker, progressPrinter("段落重建"))
 	if err != nil {
 		return err
 	}
@@ -337,9 +339,29 @@ func reparagraph(cfg config) error {
 	if err != nil {
 		return err
 	}
+
+	var resolve func(string) string
+	if mergeMap := loadSpeakerMerges(filepath.Join(cfg.data, "speakers.json")); len(mergeMap) > 0 {
+		resolve = func(label string) string {
+			seen := make(map[string]struct{}, len(mergeMap))
+			current := label
+			for {
+				if _, ok := seen[current]; ok {
+					return label
+				}
+				seen[current] = struct{}{}
+				next, ok := mergeMap[current]
+				if !ok || next == "" {
+					return current
+				}
+				current = next
+			}
+		}
+	}
+
 	client := paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, Model: cfg.llmModel})
 	stats, err := paragraph.Rebuild(context.Background(), paragraphStore, segments, client,
-		cfg.llmModel, paragraph.RunOptions{}, nil, progressPrinter("段落重建"))
+		cfg.llmModel, paragraph.RunOptions{}, nil, resolve, progressPrinter("段落重建"))
 	if err != nil {
 		return err
 	}
@@ -358,4 +380,27 @@ func progressPrinter(label string) func(done, total int) {
 func printRebuildStats(stats paragraph.RebuildStats) {
 	fmt.Printf("段落重建完成: run=%d 模型=%d 单段=%d 回退=%d 段落=%d\n",
 		stats.Runs, stats.LLM, stats.Single, stats.Fallback, stats.Paragraphs)
+}
+
+func loadSpeakerMerges(path string) map[string]string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var file struct {
+		Speakers []struct {
+			Name       string `json:"name"`
+			MergedInto string `json:"mergedInto"`
+		} `json:"speakers"`
+	}
+	if err := json.Unmarshal(data, &file); err != nil {
+		return nil
+	}
+	merges := make(map[string]string)
+	for _, s := range file.Speakers {
+		if s.MergedInto != "" {
+			merges[s.Name] = s.MergedInto
+		}
+	}
+	return merges
 }

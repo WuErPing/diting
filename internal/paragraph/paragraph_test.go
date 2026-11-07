@@ -175,7 +175,7 @@ func TestComposeParagraphsKeepsVerbatimTextAndIDs(t *testing.T) {
 	c := testSegment("c", "说话人1", "", testBase.Add(4*time.Second), testBase.Add(5*time.Second))
 	now := testBase.Add(time.Hour)
 
-	paragraphs := ComposeParagraphs([]store.Segment{a, b, c}, []Group{{1, 2}, {3, 3}}, SourceLLM, "model-x", now)
+	paragraphs := ComposeParagraphs([]store.Segment{a, b, c}, []Group{{1, 2}, {3, 3}}, SourceLLM, "model-x", now, nil)
 	if len(paragraphs) != 2 {
 		t.Fatalf("paragraphs = %d", len(paragraphs))
 	}

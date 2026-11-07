@@ -52,6 +52,8 @@ const elements = {
   speakerForm: document.querySelector("#speakerForm"),
   speakerDialogLabel: document.querySelector("#speakerDialogLabel"),
   speakerAliasInput: document.querySelector("#speakerAliasInput"),
+  speakerMergeTarget: document.querySelector("#speakerMergeTarget"),
+  speakerMergeHint: document.querySelector("#speakerMergeHint"),
   speakerDialogError: document.querySelector("#speakerDialogError"),
   speakerCancel: document.querySelector("#speakerCancel"),
   speakerSave: document.querySelector("#speakerSave"),
@@ -66,7 +68,7 @@ const elements = {
 
 const segments = new Map();
 const calendarDays = new Map();
-const speakerNames = new Map();
+const speakerViews = new Map();
 let currentStatus = { state: "STOPPED", startedAt: null };
 let nextBefore = "";
 let requestPending = false;
@@ -340,24 +342,63 @@ async function submitDelete(event) {
 async function loadSpeakers() {
   try {
     const { data } = await api("/api/speakers");
-    speakerNames.clear();
-    for (const view of data) speakerNames.set(view.label, view.name || view.label);
+    speakerViews.clear();
+    for (const view of data) speakerViews.set(view.label, view);
     renderSegments();
   } catch {
     // Speaker names only affect labels; fall back to stable tags.
   }
 }
 
+function speakerDisplayName(label) {
+  const view = speakerViews.get(label);
+  return view ? (view.name || label) : label;
+}
+
+function isMerged(label) {
+  const view = speakerViews.get(label);
+  return view && !!view.mergedInto;
+}
+
 function openSpeakerDialog(label) {
   if (!label) return;
   activeSpeakerLabel = label;
-  const name = speakerNames.get(label) || "";
+  const view = speakerViews.get(label);
+  const name = view ? (view.name || label) : label;
   elements.speakerDialogLabel.textContent = label;
   elements.speakerAliasInput.value = name === label ? "" : name;
+  elements.speakerAliasInput.disabled = isMerged(label);
+
+  const select = elements.speakerMergeTarget;
+  select.replaceChildren();
+  const noneOption = document.createElement("option");
+  noneOption.value = "";
+  noneOption.textContent = "不合并";
+  select.append(noneOption);
+  for (const [otherLabel, otherView] of speakerViews) {
+    if (otherLabel === label) continue;
+    if (otherView.mergedInto) continue;
+    const option = document.createElement("option");
+    option.value = otherLabel;
+    const displayName = otherView.name || otherLabel;
+    option.textContent = displayName === otherLabel ? otherLabel : `${displayName}（${otherLabel}）`;
+    select.append(option);
+  }
+  select.value = view?.mergedInto || "";
+  select.disabled = false;
+
+  elements.speakerMergeHint.textContent = view?.mergedInto
+    ? `当前已合并到 ${speakerDisplayName(view.mergedInto)}。选择"不合并"可取消。`
+    : "将多个声纹标签合并为同一个人，合并后内容会重新分段。留空可取消合并。";
+
   elements.speakerDialogError.hidden = true;
   elements.speakerDialog.showModal();
-  elements.speakerAliasInput.focus();
-  elements.speakerAliasInput.select();
+  if (isMerged(label)) {
+    select.focus();
+  } else {
+    elements.speakerAliasInput.focus();
+    elements.speakerAliasInput.select();
+  }
 }
 
 async function submitSpeaker(event) {
@@ -366,15 +407,29 @@ async function submitSpeaker(event) {
   if (!label) return;
   elements.speakerSave.disabled = true;
   try {
-    const view = await api(`/api/speakers/${encodeURIComponent(label)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ alias: elements.speakerAliasInput.value.trim() }),
-    });
-    const name = view.name || label;
-    speakerNames.set(label, name);
+    const mergeTarget = elements.speakerMergeTarget.value;
+    const alias = elements.speakerAliasInput.value.trim();
+
+    if (!isMerged(label) && alias !== (speakerDisplayName(label) === label ? "" : speakerDisplayName(label))) {
+      await api(`/api/speakers/${encodeURIComponent(label)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ alias }),
+      });
+    }
+
+    const currentMerge = speakerViews.get(label)?.mergedInto || "";
+    if (mergeTarget !== currentMerge) {
+      await api(`/api/speakers/${encodeURIComponent(label)}/merge`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: mergeTarget }),
+      });
+    }
+
+    await loadSpeakers();
     for (const segment of segments.values()) {
-      if (segment.speaker === label) segment.speakerName = name;
+      segment.speakerName = speakerDisplayName(segment.speaker);
     }
     elements.speakerDialog.close();
     renderSegments();
@@ -587,6 +642,7 @@ async function loadMarkdown() {
     if (request !== previewRequest) return;
     // renderMarkdown escapes every text fragment before inserting its fixed tags.
     elements.markdownPreview.innerHTML = renderMarkdown(source);
+    linkifyPreviewSpeakers();
     if (!previewLoaded || nearBottom) {
       scroll.scrollTop = scroll.scrollHeight;
       // Re-run after layout settles so the first paint already shows the newest entry.
@@ -602,6 +658,44 @@ async function loadMarkdown() {
   } catch (error) {
     if (request !== previewRequest) return;
     elements.markdownPreview.textContent = `预览加载失败：${error.message}`;
+  }
+}
+
+function linkifyPreviewSpeakers() {
+  if (speakerViews.size === 0) return;
+  const nameToLabel = new Map();
+  for (const [label, view] of speakerViews) {
+    const display = view.name || label;
+    if (!nameToLabel.has(display)) nameToLabel.set(display, label);
+    if (!nameToLabel.has(label)) nameToLabel.set(label, label);
+  }
+  for (const li of elements.markdownPreview.querySelectorAll("li")) {
+    // Structure: <strong>time</strong> · speaker · text
+    // Find the text node after <strong> that contains " · speaker · "
+    const strong = li.querySelector("strong");
+    if (!strong || !strong.nextSibling) continue;
+    const textNode = strong.nextSibling;
+    if (textNode.nodeType !== Node.TEXT_NODE) continue;
+    const parts = textNode.textContent.split(" · ");
+    if (parts.length < 3) continue;
+    const speakerText = parts[1].trim();
+    const label = nameToLabel.get(speakerText);
+    if (!label) continue;
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "md-speaker";
+    button.textContent = speakerText;
+    button.dataset.label = label;
+    button.title = `标注 ${label}`;
+
+    const before = document.createTextNode(parts[0] + " · ");
+    const after = document.createTextNode(" · " + parts.slice(2).join(" · "));
+    const parent = textNode.parentNode;
+    parent.insertBefore(before, textNode);
+    parent.insertBefore(button, textNode);
+    parent.insertBefore(after, textNode);
+    parent.removeChild(textNode);
   }
 }
 
@@ -642,14 +736,16 @@ function renderSegments() {
     item.querySelector(".segment-duration").textContent = formatDuration(segment.durationMs);
     const speaker = item.querySelector(".segment-speaker");
     if (segment.speaker) {
-      speaker.textContent = speakerNames.get(segment.speaker) || segment.speakerName || segment.speaker;
+      speaker.textContent = speakerDisplayName(segment.speaker);
       speaker.hidden = false;
       speaker.title = `标注 ${segment.speaker}`;
       speaker.dataset.label = segment.speaker;
       speaker.addEventListener("click", () => openSpeakerDialog(segment.speaker));
-      const match = /(\d+)$/.exec(segment.speaker);
+      const canonical = speakerViews.get(segment.speaker)?.mergedInto || segment.speaker;
+      const match = /(\d+)$/.exec(canonical);
       const color = match ? ((Number(match[1]) - 1) % 6) + 1 : 1;
       speaker.classList.add(`speaker-${color}`);
+      speaker.classList.toggle("is-merged", isMerged(segment.speaker));
     }
     const text = item.querySelector(".segment-text");
     text.textContent = segment.text || "未识别出文字，录音已保留";
@@ -790,6 +886,10 @@ elements.deleteCancel.addEventListener("click", () => elements.deleteDialog.clos
 elements.deleteForm.addEventListener("submit", submitDelete);
 elements.speakerCancel.addEventListener("click", () => elements.speakerDialog.close());
 elements.speakerForm.addEventListener("submit", submitSpeaker);
+elements.markdownPreview.addEventListener("click", (event) => {
+  const button = event.target.closest(".md-speaker");
+  if (button && button.dataset.label) openSpeakerDialog(button.dataset.label);
+});
 elements.lexiconButton.addEventListener("click", openLexiconDialog);
 elements.lexiconCancel.addEventListener("click", () => elements.lexiconDialog.close());
 elements.lexiconForm.addEventListener("submit", submitLexicon);

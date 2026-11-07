@@ -229,7 +229,7 @@ h1 {
   font-size: 12px;
 }
 .field { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 13px; }
-.field input, .field textarea {
+.field input, .field textarea, .field select {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--line);
@@ -238,7 +238,9 @@ h1 {
   color: var(--ink);
   font: inherit;
 }
-.field input:focus-visible, .field textarea:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+.field input:focus-visible, .field textarea:focus-visible, .field select:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+.field select { appearance: auto; }
+.field input:disabled { opacity: .5; cursor: not-allowed; }
 .field textarea { min-height: 180px; resize: vertical; font-family: var(--utility); font-size: 13px; line-height: 1.6; }
 .dialog-error { color: var(--danger); font-size: 13px; }
 .dialog-error[hidden] { display: none; }
@@ -328,6 +330,17 @@ h1 {
 .markdown-body ul { margin: 0; padding-left: 18px; }
 .markdown-body li { margin: 0 0 8px; }
 .markdown-body li::marker { color: var(--muted); }
+.md-speaker {
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--signal);
+  font-family: var(--body);
+  font-size: 13px;
+  cursor: pointer;
+}
+.md-speaker:hover { background: var(--surface-raised); border-color: var(--signal); }
 .markdown-body strong { color: var(--signal); font-family: var(--utility); font-size: 12px; font-weight: 600; }
 .markdown-body code {
   padding: 1px 5px;
@@ -415,6 +428,7 @@ h1 {
 .segment-speaker.speaker-4 { color: #c4a7e7; border-color: #c4a7e766; }
 .segment-speaker.speaker-5 { color: #f0a08e; border-color: #f0a08e66; }
 .segment-speaker.speaker-6 { color: #8fb8f0; border-color: #8fb8f066; }
+.segment-speaker.is-merged { border-style: dashed; opacity: .75; }
 .segment-duration::before { content: "· "; }
 .segment-text { margin: 10px 0 16px; font-size: 17px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
 .segment-text.is-empty { color: var(--muted); font-size: 14px; }

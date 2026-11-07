@@ -538,7 +538,7 @@ func TestRebuild(t *testing.T) {
 	var progress [][2]int
 	stats, err := Rebuild(context.Background(), paragraphStore,
 		[]store.Segment{one, two, three, four, five}, grouper, "m", RunOptions{},
-		newFakeClock(base3.Add(time.Hour)), func(done, total int) {
+		newFakeClock(base3.Add(time.Hour)), nil, func(done, total int) {
 			progress = append(progress, [2]int{done, total})
 		})
 	if err != nil {
@@ -576,7 +576,7 @@ func TestRebuildStopsCallingAfterTransportFailure(t *testing.T) {
 	}}
 	paragraphStore := openTestStore(t)
 	stats, err := Rebuild(context.Background(), paragraphStore, []store.Segment{one, two, three, four},
-		grouper, "m", RunOptions{}, newFakeClock(testBase), nil)
+		grouper, "m", RunOptions{}, newFakeClock(testBase), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -604,7 +604,7 @@ func TestRebuildRetriesAfterInvalidGrouping(t *testing.T) {
 	}}
 	paragraphStore := openTestStore(t)
 	stats, err := Rebuild(context.Background(), paragraphStore, []store.Segment{one, two, three, four},
-		grouper, "m", RunOptions{}, newFakeClock(base2), nil)
+		grouper, "m", RunOptions{}, newFakeClock(base2), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -622,7 +622,7 @@ func TestRebuildWithoutGrouperFallsBack(t *testing.T) {
 	two := testSegment("a2", "说话人1", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
 	paragraphStore := openTestStore(t)
 
-	stats, err := Rebuild(context.Background(), paragraphStore, []store.Segment{one, two}, nil, "", RunOptions{}, newFakeClock(testBase), nil)
+	stats, err := Rebuild(context.Background(), paragraphStore, []store.Segment{one, two}, nil, "", RunOptions{}, newFakeClock(testBase), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

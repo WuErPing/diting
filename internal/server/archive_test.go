@@ -55,6 +55,28 @@ func (f *fakeSpeakerDirectory) SetSpeakerAlias(label, alias string) error {
 	return speaker.ErrUnknownSpeaker
 }
 
+func (f *fakeSpeakerDirectory) CanonicalSpeaker(label string) string {
+	for _, view := range f.views {
+		if view.Label == label && view.MergedInto != "" {
+			return f.CanonicalSpeaker(view.MergedInto)
+		}
+	}
+	return label
+}
+
+func (f *fakeSpeakerDirectory) SetSpeakerMerge(label, target string) error {
+	if f.setErr != nil {
+		return f.setErr
+	}
+	for i := range f.views {
+		if f.views[i].Label == label {
+			f.views[i].MergedInto = target
+			return nil
+		}
+	}
+	return speaker.ErrUnknownSpeaker
+}
+
 func newTestServerWithSegments(t *testing.T) (*Server, *store.Store) {
 	t.Helper()
 	t.Setenv("DITING_AUDIO_FORMAT", "wav")

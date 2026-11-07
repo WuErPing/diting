@@ -35,6 +35,8 @@ type SpeakerDirectory interface {
 	Speakers() []speaker.View
 	SpeakerName(label string) string
 	SetSpeakerAlias(label, alias string) error
+	CanonicalSpeaker(label string) string
+	SetSpeakerMerge(label, target string) error
 }
 
 type Server struct {
@@ -77,6 +79,7 @@ func New(ctx context.Context, recognizer *engine.Engine, segmentStore *store.Sto
 	s.mux.HandleFunc("DELETE /api/days/{date}", s.handleDeleteDay)
 	s.mux.HandleFunc("GET /api/speakers", s.handleSpeakers)
 	s.mux.HandleFunc("PATCH /api/speakers/{label}", s.handleSpeakerAlias)
+	s.mux.HandleFunc("PUT /api/speakers/{label}/merge", s.handleSpeakerMerge)
 	s.mux.HandleFunc("GET /api/lexicon", s.handleLexicon)
 	s.mux.HandleFunc("PUT /api/lexicon", s.handleLexiconUpdate)
 	s.mux.HandleFunc("PUT /api/capture", s.handleCapture)

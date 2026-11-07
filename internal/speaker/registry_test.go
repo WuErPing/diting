@@ -197,9 +197,6 @@ func TestAliasRoundTripAndValidation(t *testing.T) {
 	if got := registry.DisplayName("说话人2"); got != "说话人2" {
 		t.Fatalf("display = %q", got)
 	}
-	if err := registry.SetAlias("说话人2", "章总"); !errors.Is(err, ErrInvalidAlias) {
-		t.Fatalf("duplicate alias err = %v", err)
-	}
 	if err := registry.SetAlias("说话人2", "说话人1"); !errors.Is(err, ErrInvalidAlias) {
 		t.Fatalf("label collision err = %v", err)
 	}
@@ -208,6 +205,20 @@ func TestAliasRoundTripAndValidation(t *testing.T) {
 	}
 	if err := registry.SetAlias("说话人2", "a\nb"); !errors.Is(err, ErrInvalidAlias) {
 		t.Fatalf("control character err = %v", err)
+	}
+	// Duplicate alias auto-merges into the speaker that already has it.
+	if err := registry.SetAlias("说话人2", "章总"); err != nil {
+		t.Fatalf("duplicate alias should auto-merge, got err = %v", err)
+	}
+	if got := registry.CanonicalLabel("说话人2"); got != "说话人1" {
+		t.Fatalf("canonical after auto-merge = %q, want 说话人1", got)
+	}
+	if got := registry.DisplayName("说话人2"); got != "章总" {
+		t.Fatalf("display after auto-merge = %q, want 章总", got)
+	}
+	// Merged speaker rejects further alias changes.
+	if err := registry.SetAlias("说话人2", "别的名字"); !errors.Is(err, ErrMergedSpeaker) {
+		t.Fatalf("merged speaker alias err = %v", err)
 	}
 
 	reopened, err := Open(path, 4, 0.6)
@@ -218,8 +229,11 @@ func TestAliasRoundTripAndValidation(t *testing.T) {
 		t.Fatalf("alias after reopen = %q", got)
 	}
 	views := reopened.Views()
-	if len(views) != 2 || views[0].Name != "章总" || views[1].Name != "说话人2" {
+	if len(views) != 2 || views[0].Name != "章总" || views[1].Name != "章总" {
 		t.Fatalf("views = %+v", views)
+	}
+	if views[1].MergedInto != "说话人1" {
+		t.Fatalf("views[1].MergedInto = %q, want 说话人1", views[1].MergedInto)
 	}
 
 	if err := reopened.SetAlias("说话人1", ""); err != nil {

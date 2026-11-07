@@ -181,7 +181,14 @@
         <span>显示名</span>
         <input id="speakerAliasInput" type="text" maxlength="32" autocomplete="off" placeholder="例如：章总">
       </label>
-      <p class="dialog-hint">留空可清除人名，恢复显示稳定标签。只影响显示，不改写历史记录。</p>
+      <label class="field">
+        <span>合并到</span>
+        <select id="speakerMergeTarget">
+          <option value="">不合并</option>
+        </select>
+      </label>
+      <p class="dialog-hint" id="speakerMergeHint">将多个声纹标签合并为同一个人，合并后内容会重新分段。留空可取消合并。</p>
+      <p class="dialog-hint">留空显示名可清除人名，恢复显示稳定标签。只影响显示，不改写历史记录。</p>
       <p class="dialog-error" id="speakerDialogError" hidden></p>
       <div class="dialog-actions">
         <button class="text-button" id="speakerCancel" type="button">取消</button>

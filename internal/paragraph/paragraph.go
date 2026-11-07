@@ -43,6 +43,7 @@ type Group struct {
 type RunOptions struct {
 	MaxSegments int
 	MaxChars    int
+	Resolve     func(string) string
 }
 
 func (o RunOptions) withDefaults() RunOptions {
@@ -53,6 +54,13 @@ func (o RunOptions) withDefaults() RunOptions {
 		o.MaxChars = defaultMaxChars
 	}
 	return o
+}
+
+func (o RunOptions) resolve(speaker string) string {
+	if o.Resolve != nil {
+		return o.Resolve(speaker)
+	}
+	return speaker
 }
 
 // BuildRuns groups consecutive segments by speaker, regardless of pauses.
@@ -67,7 +75,7 @@ func BuildRuns(segments []store.Segment, opts RunOptions) [][]store.Segment {
 		length := len([]rune(strings.TrimSpace(segment.Text)))
 		if len(current) > 0 {
 			prev := current[len(current)-1]
-			if segment.Speaker != prev.Speaker ||
+			if opts.resolve(segment.Speaker) != opts.resolve(prev.Speaker) ||
 				len(current)+1 > opts.MaxSegments ||
 				chars+length > opts.MaxChars {
 				runs = append(runs, current)
@@ -161,7 +169,7 @@ func NormalizeGroups(groups []Group, n int) ([]Group, bool, error) {
 }
 
 // ComposeParagraphs turns validated groups into paragraphs without altering text.
-func ComposeParagraphs(run []store.Segment, groups []Group, source, model string, now time.Time) []Paragraph {
+func ComposeParagraphs(run []store.Segment, groups []Group, source, model string, now time.Time, resolve func(string) string) []Paragraph {
 	paragraphs := make([]Paragraph, 0, len(groups))
 	for _, group := range groups {
 		members := run[group.Start-1 : group.End]
@@ -172,11 +180,15 @@ func ComposeParagraphs(run []store.Segment, groups []Group, source, model string
 		for i, member := range members {
 			ids[i] = member.ID
 		}
+		speaker := members[0].Speaker
+		if resolve != nil {
+			speaker = resolve(speaker)
+		}
 		paragraphs = append(paragraphs, Paragraph{
 			ID:         members[0].ID,
 			StartedAt:  members[0].StartedAt,
 			EndedAt:    members[len(members)-1].EndedAt,
-			Speaker:    members[0].Speaker,
+			Speaker:    speaker,
 			Text:       JoinTexts(members),
 			SegmentIDs: ids,
 			Source:     source,

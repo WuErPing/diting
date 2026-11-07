@@ -254,6 +254,20 @@ func (e *Engine) SetSpeakerAlias(label, alias string) error {
 	return e.speakers.SetAlias(label, alias)
 }
 
+func (e *Engine) CanonicalSpeaker(label string) string {
+	if e.speakers == nil {
+		return label
+	}
+	return e.speakers.CanonicalLabel(label)
+}
+
+func (e *Engine) SetSpeakerMerge(label, target string) error {
+	if e.speakers == nil {
+		return speaker.ErrUnknownSpeaker
+	}
+	return e.speakers.SetMerge(label, target)
+}
+
 func (e *Engine) setStatus(status Status) {
 	e.mu.Lock()
 	e.status = status

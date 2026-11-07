@@ -27,21 +27,25 @@ const (
 var (
 	ErrUnknownSpeaker = errors.New("说话人不存在")
 	ErrInvalidAlias   = errors.New("人名无效")
+	ErrMergedSpeaker  = errors.New("说话人已合并，请先取消合并")
+	ErrInvalidMerge   = errors.New("合并无效")
 )
 
 type Profile struct {
-	Name      string    `json:"name"`
-	Alias     string    `json:"alias,omitempty"`
-	Centroid  []float32 `json:"centroid"`
-	Count     int       `json:"count"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	Name       string    `json:"name"`
+	Alias      string    `json:"alias,omitempty"`
+	MergedInto string    `json:"mergedInto,omitempty"`
+	Centroid   []float32 `json:"centroid"`
+	Count      int       `json:"count"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 type View struct {
-	Label     string    `json:"label"`
-	Name      string    `json:"name"`
-	Count     int       `json:"count"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	Label      string    `json:"label"`
+	Name       string    `json:"name"`
+	MergedInto string    `json:"mergedInto,omitempty"`
+	Count      int       `json:"count"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 type registryFile struct {
@@ -148,22 +152,58 @@ func (r *Registry) Identify(embedding []float32, duration time.Duration) string 
 	return profile.Name
 }
 
-// DisplayName resolves a stable label to its human alias.
+// DisplayName resolves a stable label to its human alias, following merge chains.
 func (r *Registry) DisplayName(label string) string {
 	if label == "" {
 		return ""
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	canonical := r.canonicalLocked(label)
 	for i := range r.profiles {
-		if r.profiles[i].Name == label {
+		if r.profiles[i].Name == canonical {
 			if r.profiles[i].Alias != "" {
 				return r.profiles[i].Alias
 			}
-			return label
+			return canonical
 		}
 	}
-	return label
+	return canonical
+}
+
+// CanonicalLabel follows the mergedInto chain to find the root speaker label.
+func (r *Registry) CanonicalLabel(label string) string {
+	if label == "" {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.canonicalLocked(label)
+}
+
+func (r *Registry) canonicalLocked(label string) string {
+	seen := make(map[string]struct{}, len(r.profiles))
+	current := label
+	for {
+		if _, ok := seen[current]; ok {
+			return label
+		}
+		seen[current] = struct{}{}
+		found := false
+		for i := range r.profiles {
+			if r.profiles[i].Name == current {
+				if r.profiles[i].MergedInto == "" {
+					return current
+				}
+				current = r.profiles[i].MergedInto
+				found = true
+				break
+			}
+		}
+		if !found {
+			return current
+		}
+	}
 }
 
 func (r *Registry) Views() []View {
@@ -175,17 +215,33 @@ func (r *Registry) Views() []View {
 		if name == "" {
 			name = profile.Name
 		}
+		if profile.MergedInto != "" {
+			canonical := r.canonicalLocked(profile.Name)
+			for j := range r.profiles {
+				if r.profiles[j].Name == canonical {
+					if r.profiles[j].Alias != "" {
+						name = r.profiles[j].Alias
+					} else {
+						name = canonical
+					}
+					break
+				}
+			}
+		}
 		views[i] = View{
-			Label:     profile.Name,
-			Name:      name,
-			Count:     profile.Count,
-			UpdatedAt: profile.UpdatedAt,
+			Label:      profile.Name,
+			Name:       name,
+			MergedInto: profile.MergedInto,
+			Count:      profile.Count,
+			UpdatedAt:  profile.UpdatedAt,
 		}
 	}
 	return views
 }
 
 // SetAlias assigns or clears a human name for a stable speaker label.
+// If the alias matches another speaker's alias, this speaker is automatically
+// merged into that one (same name = same person).
 func (r *Registry) SetAlias(label, alias string) error {
 	alias = strings.TrimSpace(alias)
 	if err := validateAlias(alias); err != nil {
@@ -204,13 +260,34 @@ func (r *Registry) SetAlias(label, alias string) error {
 	if index < 0 {
 		return fmt.Errorf("%w: %s", ErrUnknownSpeaker, label)
 	}
+	if r.profiles[index].MergedInto != "" {
+		return fmt.Errorf("%w: %s 已合并到 %s", ErrMergedSpeaker, label, r.profiles[index].MergedInto)
+	}
+
+	// Same alias as another speaker → auto-merge into that speaker.
 	if alias != "" {
 		for i, profile := range r.profiles {
 			if i == index {
 				continue
 			}
-			if profile.Alias == alias || profile.Name == alias {
-				return fmt.Errorf("%w: %q 已被使用", ErrInvalidAlias, alias)
+			if profile.Name == alias {
+				return fmt.Errorf("%w: %q 与稳定标签冲突", ErrInvalidAlias, alias)
+			}
+			if profile.MergedInto != "" {
+				continue
+			}
+			if profile.Alias == alias {
+				target := r.canonicalLocked(profile.Name)
+				previousMerge := r.profiles[index].MergedInto
+				previousAlias := r.profiles[index].Alias
+				r.profiles[index].MergedInto = target
+				r.profiles[index].Alias = ""
+				if err := r.saveLocked(); err != nil {
+					r.profiles[index].MergedInto = previousMerge
+					r.profiles[index].Alias = previousAlias
+					return err
+				}
+				return nil
 			}
 		}
 	}
@@ -219,6 +296,80 @@ func (r *Registry) SetAlias(label, alias string) error {
 	r.profiles[index].Alias = alias
 	if err := r.saveLocked(); err != nil {
 		r.profiles[index].Alias = previous
+		return err
+	}
+	return nil
+}
+
+// SetMerge merges label into target, or unmerges if target is empty.
+func (r *Registry) SetMerge(label, target string) error {
+	target = strings.TrimSpace(target)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	index := -1
+	for i := range r.profiles {
+		if r.profiles[i].Name == label {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return fmt.Errorf("%w: %s", ErrUnknownSpeaker, label)
+	}
+
+	if target == "" {
+		if r.profiles[index].MergedInto == "" {
+			return nil
+		}
+		previous := r.profiles[index].MergedInto
+		r.profiles[index].MergedInto = ""
+		if err := r.saveLocked(); err != nil {
+			r.profiles[index].MergedInto = previous
+			return err
+		}
+		return nil
+	}
+
+	if target == label {
+		return fmt.Errorf("%w: 不能合并到自己", ErrInvalidMerge)
+	}
+	targetIndex := -1
+	for i := range r.profiles {
+		if r.profiles[i].Name == target {
+			targetIndex = i
+			break
+		}
+	}
+	if targetIndex < 0 {
+		return fmt.Errorf("%w: 目标 %s 不存在", ErrUnknownSpeaker, target)
+	}
+	// Check for cycles: follow target's chain; if we reach label, it's a cycle.
+	current := target
+	for steps := 0; steps < len(r.profiles); steps++ {
+		if current == label {
+			return fmt.Errorf("%w: 会形成循环合并", ErrInvalidMerge)
+		}
+		next := ""
+		for i := range r.profiles {
+			if r.profiles[i].Name == current {
+				next = r.profiles[i].MergedInto
+				break
+			}
+		}
+		if next == "" {
+			break
+		}
+		current = next
+	}
+
+	previousMerge := r.profiles[index].MergedInto
+	previousAlias := r.profiles[index].Alias
+	r.profiles[index].MergedInto = target
+	r.profiles[index].Alias = ""
+	if err := r.saveLocked(); err != nil {
+		r.profiles[index].MergedInto = previousMerge
+		r.profiles[index].Alias = previousAlias
 		return err
 	}
 	return nil

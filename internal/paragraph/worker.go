@@ -46,6 +46,7 @@ type Worker struct {
 	mu          sync.Mutex
 	inbox       []store.Segment
 	onParagraph func(Paragraph)
+	resolve     func(string) string
 	started     bool
 	closed      bool
 	cancel      context.CancelFunc
@@ -94,6 +95,22 @@ func (w *Worker) SetOnParagraph(fn func(Paragraph)) {
 	w.mu.Lock()
 	w.onParagraph = fn
 	w.mu.Unlock()
+}
+
+func (w *Worker) SetSpeakerResolver(fn func(string) string) {
+	w.mu.Lock()
+	w.resolve = fn
+	w.mu.Unlock()
+}
+
+func (w *Worker) speakerResolve(label string) string {
+	w.mu.Lock()
+	fn := w.resolve
+	w.mu.Unlock()
+	if fn != nil {
+		return fn(label)
+	}
+	return label
 }
 
 func (w *Worker) Start(ctx context.Context) {
@@ -217,6 +234,7 @@ func (w *Worker) reloadRequested() bool {
 
 func (w *Worker) backfill(ctx context.Context) {
 	opts := w.runOpts.withDefaults()
+	opts.Resolve = w.speakerResolve
 	w.seen = make(map[string]struct{})
 	w.open = nil
 	w.openChars = 0
@@ -294,7 +312,7 @@ func (w *Worker) accept(segment store.Segment) {
 func (w *Worker) continues(segment store.Segment) bool {
 	opts := w.runOpts.withDefaults()
 	prev := w.open[len(w.open)-1]
-	return segment.Speaker == prev.Speaker &&
+	return w.speakerResolve(segment.Speaker) == w.speakerResolve(prev.Speaker) &&
 		len(w.open)+1 <= opts.MaxSegments &&
 		w.openChars+textLength(segment.Text) <= opts.MaxChars
 }
@@ -359,7 +377,7 @@ func (w *Worker) process(ctx context.Context, job job) {
 		}
 	}
 
-	paragraphs := ComposeParagraphs(run, groups, source, w.opts.Model, w.clock.Now())
+	paragraphs := ComposeParagraphs(run, groups, source, w.opts.Model, w.clock.Now(), w.speakerResolve)
 	if err := w.opts.Store.SaveMany(paragraphs); err != nil {
 		w.opts.Logf("保存段落失败: %v", err)
 		return
@@ -446,10 +464,11 @@ type RebuildStats struct {
 // Rebuild regenerates every paragraph from the given segments and atomically
 // replaces the paragraph file. Failures fall back to whole-run concatenation.
 func Rebuild(ctx context.Context, paragraphStore *Store, segments []store.Segment, grouper Grouper,
-	model string, opts RunOptions, clock Clock, progress func(done, total int)) (RebuildStats, error) {
+	model string, opts RunOptions, clock Clock, resolve func(string) string, progress func(done, total int)) (RebuildStats, error) {
 	if clock == nil {
 		clock = realClock{}
 	}
+	opts.Resolve = resolve
 	runs := BuildRuns(segments, opts)
 	stats := RebuildStats{Runs: len(runs)}
 	paragraphs := make([]Paragraph, 0, len(runs))
@@ -487,7 +506,7 @@ func Rebuild(ctx context.Context, paragraphStore *Store, segments []store.Segmen
 				}
 			}
 		}
-		paragraphs = append(paragraphs, ComposeParagraphs(run, groups, source, model, clock.Now())...)
+		paragraphs = append(paragraphs, ComposeParagraphs(run, groups, source, model, clock.Now(), resolve)...)
 		switch source {
 		case SourceLLM:
 			stats.LLM++
