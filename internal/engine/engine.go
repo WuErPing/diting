@@ -11,6 +11,7 @@ import (
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/v2/sherpa_onnx"
 
 	"diting/internal/audio"
+	"diting/internal/lexicon"
 	"diting/internal/speaker"
 	"diting/internal/store"
 )
@@ -47,6 +48,7 @@ type Event struct {
 type Options struct {
 	SpeakerRegistry  string
 	SpeakerThreshold float32
+	Lexicon          *lexicon.Lexicon
 	OnSegment        func(store.Segment) // must not block
 }
 
@@ -57,6 +59,7 @@ type Engine struct {
 	refiner    *sherpa.OfflineRecognizer
 	speakerEx  *sherpa.SpeakerEmbeddingExtractor
 	speakers   *speaker.Registry
+	lexicon    *lexicon.Lexicon
 
 	opMu            sync.Mutex
 	mu              sync.RWMutex
@@ -87,6 +90,7 @@ func New(paths ModelPaths, segmentStore *store.Store, opts Options) (*Engine, er
 		status:     Status{State: StateStopped},
 		events:     make(chan Event, 256),
 		onSegment:  opts.OnSegment,
+		lexicon:    opts.Lexicon,
 	}
 	if opts.SpeakerRegistry != "" {
 		extractor, err := NewSpeakerExtractor(paths)
@@ -226,7 +230,28 @@ func (e *Engine) refine(samples []float32) string {
 	defer sherpa.DeleteOfflineStream(stream)
 	stream.AcceptWaveform(SampleRate, samples)
 	e.refiner.Decode(stream)
-	return strings.TrimSpace(stream.GetResult().Text)
+	return e.lexicon.Apply(strings.TrimSpace(stream.GetResult().Text))
+}
+
+func (e *Engine) Speakers() []speaker.View {
+	if e.speakers == nil {
+		return nil
+	}
+	return e.speakers.Views()
+}
+
+func (e *Engine) SpeakerName(label string) string {
+	if e.speakers == nil {
+		return label
+	}
+	return e.speakers.DisplayName(label)
+}
+
+func (e *Engine) SetSpeakerAlias(label, alias string) error {
+	if e.speakers == nil {
+		return speaker.ErrUnknownSpeaker
+	}
+	return e.speakers.SetAlias(label, alias)
 }
 
 func (e *Engine) setStatus(status Status) {

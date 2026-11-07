@@ -158,9 +158,6 @@ func (c *Client) Group(ctx context.Context, texts []string) ([]Group, error) {
 	if err != nil {
 		return nil, invalidGrouping(err)
 	}
-	if err := ValidateGroups(groups, len(texts)); err != nil {
-		return nil, invalidGrouping(err)
-	}
 	return groups, nil
 }
 
@@ -297,7 +294,8 @@ func parseGroups(raw string, n int) ([]Group, error) {
 	for _, item := range payload.Paragraphs {
 		groups = append(groups, Group{Start: int(item.Start), End: int(item.End)})
 	}
-	if err := ValidateGroups(groups, n); err != nil {
+	groups, _, err := NormalizeGroups(groups, n)
+	if err != nil {
 		return nil, err
 	}
 	return groups, nil

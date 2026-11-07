@@ -97,6 +97,42 @@ func (s *Store) Reset() error {
 	return s.Replace(nil)
 }
 
+// RemoveSegments drops every paragraph intersecting the deleted segment IDs.
+// A paragraph that spans a deleted day is discarded whole and will be rebuilt
+// from the surviving segments by the worker's backfill.
+func (s *Store) RemoveSegments(ids map[string]struct{}) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	next := make([]Paragraph, 0, len(s.list))
+	removed := 0
+	for _, paragraph := range s.list {
+		drop := false
+		for _, id := range paragraph.SegmentIDs {
+			if _, ok := ids[id]; ok {
+				drop = true
+				break
+			}
+		}
+		if drop {
+			removed++
+			continue
+		}
+		next = append(next, paragraph)
+	}
+	if removed == 0 {
+		return 0, nil
+	}
+	if err := s.rewriteLocked(next); err != nil {
+		return 0, err
+	}
+	s.list = next
+	return removed, nil
+}
+
 func (s *Store) Coverage() map[string]string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

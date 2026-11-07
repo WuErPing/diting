@@ -8,18 +8,38 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
 	registryVersion   = 1
-	minEnrollDuration = 2 * time.Second
+	minEnrollDuration = 3 * time.Second
+	minUpdateDuration = 1500 * time.Millisecond
+	maxBlendWeight    = 20
+	enrollMargin      = float32(0.08)
+	maxAliasRunes     = 32
+)
+
+var (
+	ErrUnknownSpeaker = errors.New("说话人不存在")
+	ErrInvalidAlias   = errors.New("人名无效")
 )
 
 type Profile struct {
 	Name      string    `json:"name"`
+	Alias     string    `json:"alias,omitempty"`
 	Centroid  []float32 `json:"centroid"`
+	Count     int       `json:"count"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type View struct {
+	Label     string    `json:"label"`
+	Name      string    `json:"name"`
 	Count     int       `json:"count"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
@@ -82,8 +102,9 @@ func Open(path string, dim int, threshold float32) (*Registry, error) {
 	return registry, nil
 }
 
-// Identify returns the matching speaker name, enrolling a new speaker when the
-// segment is long enough to produce a reliable voiceprint.
+// Identify returns the matching speaker name. Short segments only match; they
+// never update a centroid. A new speaker is enrolled only when the best score
+// is clearly below the threshold, which avoids fragmenting one voice.
 func (r *Registry) Identify(embedding []float32, duration time.Duration) string {
 	normalized := Normalize(embedding)
 	if normalized == nil || len(normalized) != r.dim {
@@ -93,13 +114,20 @@ func (r *Registry) Identify(embedding []float32, duration time.Duration) string 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	best, _ := Assign(r.profiles, normalized, r.threshold)
-	if best >= 0 {
+	if len(r.profiles) > 0 {
+		best, score := closest(r.profiles, normalized)
 		profile := &r.profiles[best]
-		profile.Centroid = Normalize(blend(profile.Centroid, profile.Count, normalized))
-		profile.Count++
-		profile.UpdatedAt = time.Now().UTC()
-		return profile.Name
+		if score >= r.threshold {
+			if duration >= minUpdateDuration {
+				profile.Centroid = Normalize(blend(profile.Centroid, profile.Count, normalized))
+				profile.Count++
+				profile.UpdatedAt = time.Now().UTC()
+			}
+			return profile.Name
+		}
+		if score >= r.threshold-enrollMargin {
+			return profile.Name
+		}
 	}
 
 	if duration < minEnrollDuration {
@@ -118,6 +146,94 @@ func (r *Registry) Identify(embedding []float32, duration time.Duration) string 
 		log.Printf("保存声纹注册表失败: %v", err)
 	}
 	return profile.Name
+}
+
+// DisplayName resolves a stable label to its human alias.
+func (r *Registry) DisplayName(label string) string {
+	if label == "" {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.profiles {
+		if r.profiles[i].Name == label {
+			if r.profiles[i].Alias != "" {
+				return r.profiles[i].Alias
+			}
+			return label
+		}
+	}
+	return label
+}
+
+func (r *Registry) Views() []View {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	views := make([]View, len(r.profiles))
+	for i, profile := range r.profiles {
+		name := profile.Alias
+		if name == "" {
+			name = profile.Name
+		}
+		views[i] = View{
+			Label:     profile.Name,
+			Name:      name,
+			Count:     profile.Count,
+			UpdatedAt: profile.UpdatedAt,
+		}
+	}
+	return views
+}
+
+// SetAlias assigns or clears a human name for a stable speaker label.
+func (r *Registry) SetAlias(label, alias string) error {
+	alias = strings.TrimSpace(alias)
+	if err := validateAlias(alias); err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	index := -1
+	for i := range r.profiles {
+		if r.profiles[i].Name == label {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return fmt.Errorf("%w: %s", ErrUnknownSpeaker, label)
+	}
+	if alias != "" {
+		for i, profile := range r.profiles {
+			if i == index {
+				continue
+			}
+			if profile.Alias == alias || profile.Name == alias {
+				return fmt.Errorf("%w: %q 已被使用", ErrInvalidAlias, alias)
+			}
+		}
+	}
+
+	previous := r.profiles[index].Alias
+	r.profiles[index].Alias = alias
+	if err := r.saveLocked(); err != nil {
+		r.profiles[index].Alias = previous
+		return err
+	}
+	return nil
+}
+
+func validateAlias(alias string) error {
+	if utf8.RuneCountInString(alias) > maxAliasRunes {
+		return fmt.Errorf("%w: 不能超过 %d 个字", ErrInvalidAlias, maxAliasRunes)
+	}
+	for _, character := range alias {
+		if unicode.IsControl(character) {
+			return fmt.Errorf("%w: 不能包含控制字符", ErrInvalidAlias)
+		}
+	}
+	return nil
 }
 
 func (r *Registry) Save() error {
@@ -182,15 +298,20 @@ func (r *Registry) saveLocked() error {
 // Assign returns the closest profile index and cosine score. A negative index
 // means no profile reached the threshold.
 func Assign(profiles []Profile, embedding []float32, threshold float32) (int, float32) {
-	best, bestScore := -1, float32(0)
+	best, bestScore := closest(profiles, embedding)
+	if best < 0 || bestScore < threshold {
+		return -1, bestScore
+	}
+	return best, bestScore
+}
+
+func closest(profiles []Profile, embedding []float32) (int, float32) {
+	best, bestScore := -1, float32(-1)
 	for i, profile := range profiles {
 		score := Cosine(embedding, profile.Centroid)
 		if score > bestScore {
 			best, bestScore = i, score
 		}
-	}
-	if bestScore < threshold {
-		return -1, bestScore
 	}
 	return best, bestScore
 }
@@ -234,6 +355,9 @@ func Cosine(a, b []float32) float32 {
 func blend(centroid []float32, count int, embedding []float32) []float32 {
 	sum := make([]float32, len(centroid))
 	weight := float32(count)
+	if weight > maxBlendWeight {
+		weight = maxBlendWeight
+	}
 	for i := range centroid {
 		sum[i] = centroid[i]*weight + embedding[i]
 	}

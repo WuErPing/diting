@@ -36,25 +36,15 @@ func TestBuildRunsSplitsOnSpeakerChange(t *testing.T) {
 	}
 }
 
-func TestBuildRunsGapThreshold(t *testing.T) {
+func TestBuildRunsIgnoresLongPauses(t *testing.T) {
 	first := testSegment("a", "说话人1", "一", testBase, testBase.Add(time.Second))
-	cases := []struct {
-		name string
-		gap  time.Duration
-		want [][]string
-	}{
-		{"exactly idle", 60 * time.Second, [][]string{{"a", "b"}}},
-		{"one tick over", 60*time.Second + time.Nanosecond, [][]string{{"a"}, {"b"}}},
-		{"negative gap", -2 * time.Second, [][]string{{"a", "b"}}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			next := testSegment("b", "说话人1", "二", first.EndedAt.Add(tc.gap), first.EndedAt.Add(tc.gap+time.Second))
-			runs := BuildRuns([]store.Segment{first, next}, RunOptions{})
-			if got := runIDs(runs); !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("runs = %v, want %v", got, tc.want)
-			}
-		})
+	for _, gap := range []time.Duration{time.Minute, time.Hour, -2 * time.Second} {
+		next := testSegment("b", "说话人1", "二", first.EndedAt.Add(gap), first.EndedAt.Add(gap+time.Second))
+		runs := BuildRuns([]store.Segment{first, next}, RunOptions{})
+		want := [][]string{{"a", "b"}}
+		if got := runIDs(runs); !reflect.DeepEqual(got, want) {
+			t.Fatalf("gap %s: runs = %v, want %v", gap, got, want)
+		}
 	}
 }
 
@@ -137,32 +127,43 @@ func TestJoinTextsVerbatim(t *testing.T) {
 	}
 }
 
-func TestValidateGroups(t *testing.T) {
+func TestNormalizeGroups(t *testing.T) {
 	cases := []struct {
-		name   string
-		groups []Group
-		n      int
-		ok     bool
+		name    string
+		groups  []Group
+		n       int
+		want    []Group
+		changed bool
+		ok      bool
 	}{
-		{"single full", []Group{{1, 3}}, 3, true},
-		{"split", []Group{{1, 2}, {3, 3}}, 3, true},
-		{"empty groups", nil, 3, false},
-		{"no sentences", []Group{{1, 1}}, 0, false},
-		{"gap", []Group{{1, 1}, {3, 3}}, 3, false},
-		{"overlap", []Group{{1, 2}, {2, 3}}, 3, false},
-		{"out of range", []Group{{1, 4}}, 3, false},
-		{"incomplete", []Group{{1, 2}}, 3, false},
-		{"reversed", []Group{{1, 0}}, 3, false},
-		{"wrong start", []Group{{2, 3}}, 3, false},
+		{"single full", []Group{{1, 3}}, 3, []Group{{1, 3}}, false, true},
+		{"split", []Group{{1, 2}, {3, 3}}, 3, []Group{{1, 2}, {3, 3}}, false, true},
+		{"gap between groups", []Group{{1, 1}, {3, 3}}, 3, []Group{{1, 1}, {2, 3}}, true, true},
+		{"leading gap", []Group{{3, 5}}, 5, []Group{{1, 5}}, true, true},
+		{"trailing gap", []Group{{1, 2}}, 5, []Group{{1, 5}}, true, true},
+		{"empty groups", nil, 3, nil, false, false},
+		{"no sentences", []Group{{1, 1}}, 0, nil, false, false},
+		{"overlap", []Group{{1, 2}, {2, 3}}, 3, nil, false, false},
+		{"out of range", []Group{{1, 4}}, 3, nil, false, false},
+		{"reversed", []Group{{1, 0}}, 3, nil, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := ValidateGroups(tc.groups, tc.n)
+			got, changed, err := NormalizeGroups(tc.groups, tc.n)
 			if tc.ok && err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if !tc.ok && err == nil {
-				t.Fatal("expected error")
+			if !tc.ok {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if changed != tc.changed {
+				t.Fatalf("changed = %v, want %v", changed, tc.changed)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("groups = %v, want %v", got, tc.want)
 			}
 		})
 	}

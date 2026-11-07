@@ -11,19 +11,20 @@ import (
 )
 
 func TestEngineSSEEventMapping(t *testing.T) {
-	interim := engineSSEEvent(engine.Event{Type: "interim", Interim: engine.Interim{Text: "临时"}})
+	interim := engineSSEEvent(engine.Event{Type: "interim", Interim: engine.Interim{Text: "临时"}}, nil)
 	if interim.Type != "interim" || interim.Data != (engine.Interim{Text: "临时"}) {
 		t.Fatalf("interim = %+v", interim)
 	}
 
 	segment := store.Segment{ID: "s1", Text: "一句"}
-	segmentEvent := engineSSEEvent(engine.Event{Type: "segment", Segment: segment})
-	if segmentEvent.Type != "segment" || segmentEvent.Data != segment {
+	segmentEvent := engineSSEEvent(engine.Event{Type: "segment", Segment: segment}, nil)
+	view, ok := segmentEvent.Data.(segmentView)
+	if !ok || segmentEvent.Type != "segment" || view.Segment != segment {
 		t.Fatalf("segment = %+v", segmentEvent)
 	}
 
 	status := engine.Status{SegmentCount: 3}
-	statusEvent := engineSSEEvent(engine.Event{Type: "status", Status: status})
+	statusEvent := engineSSEEvent(engine.Event{Type: "status", Status: status}, nil)
 	if statusEvent.Type != "status" || statusEvent.Data != status {
 		t.Fatalf("status = %+v", statusEvent)
 	}
@@ -33,7 +34,7 @@ func TestEventHubForwardsParagraphEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	source := make(chan engine.Event, 4)
-	hub := newEventHub(ctx, source)
+	hub := newEventHub(ctx, source, nil)
 	defer hub.Close()
 	client, unsubscribe := hub.subscribe()
 	defer unsubscribe()

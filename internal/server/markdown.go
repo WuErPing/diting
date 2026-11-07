@@ -40,10 +40,16 @@ func (s *Server) handleMarkdown(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "MARKDOWN_FAILED", "无法生成合并文稿")
 		return
 	}
+	for i := range segments {
+		segments[i].Speaker = s.speakerName(segments[i].Speaker)
+	}
 
 	var paragraphs []paragraph.Paragraph
 	if s.merge && s.paragraphs != nil {
 		paragraphs = s.paragraphs.All()
+		for i := range paragraphs {
+			paragraphs[i].Speaker = s.speakerName(paragraphs[i].Speaker)
+		}
 	}
 
 	now := time.Now()

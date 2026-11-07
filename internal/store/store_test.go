@@ -7,6 +7,47 @@ import (
 	"time"
 )
 
+func TestStats(t *testing.T) {
+	root := t.TempDir()
+	segmentStore, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer segmentStore.Close()
+
+	empty, err := segmentStore.Stats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty != (Stats{}) {
+		t.Fatalf("empty stats = %+v", empty)
+	}
+
+	base := time.Date(2026, 11, 6, 14, 0, 0, 0, time.Local)
+	for i, text := range []string{"你好", " world "} {
+		started := base.Add(time.Duration(i) * time.Minute)
+		if _, err := segmentStore.Save(Segment{
+			ID:        started.Format("20060102-150405.000000000"),
+			StartedAt: started,
+			EndedAt:   started.Add(2 * time.Second),
+			Text:      text,
+		}, []float32{0.1, -0.2, 0.3}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stats, err := segmentStore.Stats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.AudioFiles != 2 || stats.Segments != 2 || stats.TranscriptChars != 7 {
+		t.Fatalf("stats = %+v", stats)
+	}
+	if stats.AudioBytes <= 0 {
+		t.Fatalf("audio bytes = %d", stats.AudioBytes)
+	}
+}
+
 func TestAllAndRewrite(t *testing.T) {
 	root := t.TempDir()
 	segmentStore, err := Open(root)

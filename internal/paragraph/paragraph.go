@@ -15,7 +15,6 @@ const (
 )
 
 const (
-	defaultIdleTimeout = 60 * time.Second
 	defaultMaxSegments = 20
 	defaultMaxChars    = 3000
 )
@@ -42,15 +41,11 @@ type Group struct {
 }
 
 type RunOptions struct {
-	IdleTimeout time.Duration
 	MaxSegments int
 	MaxChars    int
 }
 
 func (o RunOptions) withDefaults() RunOptions {
-	if o.IdleTimeout <= 0 {
-		o.IdleTimeout = defaultIdleTimeout
-	}
 	if o.MaxSegments <= 0 {
 		o.MaxSegments = defaultMaxSegments
 	}
@@ -60,9 +55,9 @@ func (o RunOptions) withDefaults() RunOptions {
 	return o
 }
 
-// BuildRuns splits chronologically ordered segments into runs that share a
-// speaker and contain no pause longer than IdleTimeout. Segment and character
-// caps bound the prompt size; an oversized single segment still forms a run.
+// BuildRuns groups consecutive segments by speaker, regardless of pauses.
+// Segment and character caps bound the prompt size; an oversized single
+// segment still forms a run.
 func BuildRuns(segments []store.Segment, opts RunOptions) [][]store.Segment {
 	opts = opts.withDefaults()
 	var runs [][]store.Segment
@@ -72,9 +67,7 @@ func BuildRuns(segments []store.Segment, opts RunOptions) [][]store.Segment {
 		length := len([]rune(strings.TrimSpace(segment.Text)))
 		if len(current) > 0 {
 			prev := current[len(current)-1]
-			gap := segment.StartedAt.Sub(prev.EndedAt)
 			if segment.Speaker != prev.Speaker ||
-				gap > opts.IdleTimeout ||
 				len(current)+1 > opts.MaxSegments ||
 				chars+length > opts.MaxChars {
 				runs = append(runs, current)
@@ -133,28 +126,38 @@ func isASCIIWord(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 }
 
-// ValidateGroups requires the groups to cover 1..n exactly once, in order.
-func ValidateGroups(groups []Group, n int) error {
+// NormalizeGroups repairs gaps in model output by pulling each group's start
+// back to the first uncovered sentence; a trailing gap extends the last group.
+// Overlapping, reversed or out-of-range groups are still errors.
+func NormalizeGroups(groups []Group, n int) ([]Group, bool, error) {
 	if n <= 0 {
-		return fmt.Errorf("没有可划分的语句")
+		return nil, false, fmt.Errorf("没有可划分的语句")
 	}
 	if len(groups) == 0 {
-		return fmt.Errorf("段落划分为空")
+		return nil, false, fmt.Errorf("段落划分为空")
 	}
+	repaired := make([]Group, len(groups))
 	expected := 1
+	changed := false
 	for i, group := range groups {
-		if group.Start != expected {
-			return fmt.Errorf("段落 %d 起点为 %d，应为 %d", i+1, group.Start, expected)
-		}
 		if group.End < group.Start || group.End > n {
-			return fmt.Errorf("段落 %d 范围 %d-%d 无效", i+1, group.Start, group.End)
+			return nil, false, fmt.Errorf("段落 %d 范围 %d-%d 无效", i+1, group.Start, group.End)
 		}
+		if group.Start < expected {
+			return nil, false, fmt.Errorf("段落 %d 起点为 %d，与已覆盖范围重叠", i+1, group.Start)
+		}
+		if group.Start > expected {
+			group.Start = expected
+			changed = true
+		}
+		repaired[i] = group
 		expected = group.End + 1
 	}
-	if expected != n+1 {
-		return fmt.Errorf("段落划分只覆盖到 %d，共 %d 句", expected-1, n)
+	if expected <= n {
+		repaired[len(repaired)-1].End = n
+		changed = true
 	}
-	return nil
+	return repaired, changed, nil
 }
 
 // ComposeParagraphs turns validated groups into paragraphs without altering text.

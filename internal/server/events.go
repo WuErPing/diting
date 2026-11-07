@@ -16,11 +16,12 @@ type eventHub struct {
 	mu      sync.Mutex
 	clients map[chan sseEvent]struct{}
 	cancel  context.CancelFunc
+	resolve func(string) string
 }
 
-func newEventHub(ctx context.Context, source <-chan engine.Event) *eventHub {
+func newEventHub(ctx context.Context, source <-chan engine.Event, resolve func(string) string) *eventHub {
 	ctx, cancel := context.WithCancel(ctx)
-	hub := &eventHub{clients: make(map[chan sseEvent]struct{}), cancel: cancel}
+	hub := &eventHub{clients: make(map[chan sseEvent]struct{}), cancel: cancel, resolve: resolve}
 	go func() {
 		for {
 			select {
@@ -28,19 +29,23 @@ func newEventHub(ctx context.Context, source <-chan engine.Event) *eventHub {
 				hub.close()
 				return
 			case event := <-source:
-				hub.publish(engineSSEEvent(event))
+				hub.publish(engineSSEEvent(event, hub.resolve))
 			}
 		}
 	}()
 	return hub
 }
 
-func engineSSEEvent(event engine.Event) sseEvent {
+func engineSSEEvent(event engine.Event, resolve func(string) string) sseEvent {
 	switch event.Type {
 	case "interim":
 		return sseEvent{Type: event.Type, Data: event.Interim}
 	case "segment":
-		return sseEvent{Type: event.Type, Data: event.Segment}
+		name := ""
+		if resolve != nil && event.Segment.Speaker != "" {
+			name = resolve(event.Segment.Speaker)
+		}
+		return sseEvent{Type: event.Type, Data: segmentView{Segment: event.Segment, SpeakerName: name}}
 	default:
 		return sseEvent{Type: event.Type, Data: event.Status}
 	}

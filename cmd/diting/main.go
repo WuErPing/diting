@@ -18,6 +18,7 @@ import (
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/v2/sherpa_onnx"
 
 	"diting/internal/engine"
+	"diting/internal/lexicon"
 	"diting/internal/paragraph"
 	"diting/internal/server"
 	"diting/internal/store"
@@ -89,6 +90,11 @@ func run(cfg config) error {
 	}
 	defer segmentStore.Close()
 
+	lex, err := lexicon.Open(filepath.Join(cfg.data, "lexicon.json"))
+	if err != nil {
+		return err
+	}
+
 	var paragraphStore *paragraph.Store
 	var worker *paragraph.Worker
 	var client *paragraph.Client
@@ -107,7 +113,7 @@ func run(cfg config) error {
 		defer worker.Close()
 	}
 
-	options := engineOptions(cfg)
+	options := engineOptions(cfg, lex)
 	if worker != nil {
 		options.OnSegment = worker.Notify
 	}
@@ -119,7 +125,11 @@ func run(cfg config) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	console := server.New(ctx, recognizer, segmentStore, paragraphStore, cfg.merge, web.Files)
+	var reload func()
+	if worker != nil {
+		reload = worker.Reload
+	}
+	console := server.New(ctx, recognizer, segmentStore, paragraphStore, cfg.merge, lex, reload, web.Files)
 	defer console.Close()
 
 	if worker != nil {
@@ -185,10 +195,11 @@ func modelPaths(cfg config) engine.ModelPaths {
 	return paths
 }
 
-func engineOptions(cfg config) engine.Options {
+func engineOptions(cfg config, lex *lexicon.Lexicon) engine.Options {
 	return engine.Options{
 		SpeakerRegistry:  filepath.Join(cfg.data, "speakers.json"),
 		SpeakerThreshold: float32(cfg.speakerThreshold),
+		Lexicon:          lex,
 	}
 }
 
@@ -211,7 +222,11 @@ func verify(cfg config) error {
 	}
 	defer segmentStore.Close()
 
-	recognizer, err := engine.New(modelPaths(cfg), segmentStore, engineOptions(cfg))
+	lex, err := lexicon.Open(filepath.Join(cfg.data, "lexicon.json"))
+	if err != nil {
+		return err
+	}
+	recognizer, err := engine.New(modelPaths(cfg), segmentStore, engineOptions(cfg, lex))
 	if err != nil {
 		return err
 	}
@@ -256,7 +271,11 @@ func retranscribe(cfg config) error {
 	}
 	defer segmentStore.Close()
 
-	recognizer, err := engine.New(modelPaths(cfg), segmentStore, engineOptions(cfg))
+	lex, err := lexicon.Open(filepath.Join(cfg.data, "lexicon.json"))
+	if err != nil {
+		return err
+	}
+	recognizer, err := engine.New(modelPaths(cfg), segmentStore, engineOptions(cfg, lex))
 	if err != nil {
 		return err
 	}

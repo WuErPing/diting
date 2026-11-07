@@ -32,7 +32,6 @@ type WorkerOptions struct {
 	Segments    SegmentSource
 	Grouper     Grouper
 	Model       string
-	IdleTimeout time.Duration
 	MaxSegments int
 	MaxChars    int
 	Clock       Clock
@@ -51,11 +50,13 @@ type Worker struct {
 	closed      bool
 	cancel      context.CancelFunc
 	wake        chan struct{}
+	reload      chan struct{}
 	done        chan struct{}
 
 	seen       map[string]struct{}
 	open       []store.Segment
 	openChars  int
+	openDirty  bool
 	high       []job
 	low        []job
 	failures   int
@@ -80,12 +81,12 @@ func NewWorker(opts WorkerOptions) *Worker {
 		opts:  opts,
 		clock: opts.Clock,
 		runOpts: RunOptions{
-			IdleTimeout: opts.IdleTimeout,
 			MaxSegments: opts.MaxSegments,
 			MaxChars:    opts.MaxChars,
 		},
-		wake: make(chan struct{}, 1),
-		done: make(chan struct{}),
+		wake:   make(chan struct{}, 1),
+		reload: make(chan struct{}, 1),
+		done:   make(chan struct{}),
 	}
 }
 
@@ -126,6 +127,16 @@ func (w *Worker) Notify(segment store.Segment) {
 	}
 }
 
+// Reload discards queued work and rebuilds the worker state from the current
+// transcript store. It is used after a day is deleted so stale paragraphs and
+// in-memory runs cannot be written back.
+func (w *Worker) Reload() {
+	select {
+	case w.reload <- struct{}{}:
+	default:
+	}
+}
+
 func (w *Worker) Close() error {
 	w.mu.Lock()
 	if w.closed {
@@ -159,28 +170,23 @@ func (w *Worker) loop(ctx context.Context) {
 		}
 		w.drainInbox()
 
+		if w.reloadRequested() {
+			w.backfill(ctx)
+			continue
+		}
+
 		if len(w.high) > 0 {
 			w.process(ctx, w.high[0])
 			w.high = w.high[1:]
 			continue
 		}
 
-		deadline, hasOpen := w.openDeadline()
-		if hasOpen && !w.clock.Now().Before(deadline) {
-			w.closeOpen()
-			continue
-		}
-		if hasOpen && len(w.low) == 0 {
-			delay := deadline.Sub(w.clock.Now())
-			timer := w.clock.NewTimer(delay)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return
-			case <-w.wake:
-			case <-timer.C():
-			}
-			timer.Stop()
+		// Re-group the whole open run as soon as a new segment arrives. Clear the
+		// flag first so segments accepted mid-request are processed again.
+		if w.openDirty && len(w.open) > 0 {
+			run := append([]store.Segment(nil), w.open...)
+			w.openDirty = false
+			w.process(ctx, job{run: run})
 			continue
 		}
 
@@ -193,8 +199,19 @@ func (w *Worker) loop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-w.reload:
+			w.backfill(ctx)
 		case <-w.wake:
 		}
+	}
+}
+
+func (w *Worker) reloadRequested() bool {
+	select {
+	case <-w.reload:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -203,6 +220,8 @@ func (w *Worker) backfill(ctx context.Context) {
 	w.seen = make(map[string]struct{})
 	w.open = nil
 	w.openChars = 0
+	w.backfillN = 0
+	w.backfillLL = 0
 	if w.opts.Segments == nil || w.opts.Store == nil {
 		return
 	}
@@ -220,19 +239,18 @@ func (w *Worker) backfill(ctx context.Context) {
 
 	runs := BuildRuns(segments, opts)
 	coverage := w.opts.Store.Coverage()
-	now := w.clock.Now()
 	for i, run := range runs {
 		if ctx.Err() != nil {
 			return
 		}
-		if coveredBySource(run, coverage, false) {
-			continue
-		}
-		last := run[len(run)-1]
-		if i == len(runs)-1 && now.Sub(last.EndedAt) < opts.IdleTimeout {
-			// Keep the tail open so segments saved after startup extend it.
+		if i == len(runs)-1 {
+			// Keep the newest run open so live segments extend and re-judge it.
 			w.open = append([]store.Segment(nil), run...)
 			w.openChars = runChars(run)
+			w.openDirty = !coveredBySource(run, coverage, false)
+			continue
+		}
+		if coveredBySource(run, coverage, false) {
 			continue
 		}
 		w.low = append(w.low, job{run: run})
@@ -247,18 +265,16 @@ func (w *Worker) backfill(ctx context.Context) {
 }
 
 func (w *Worker) drainInbox() {
-	for {
-		w.mu.Lock()
-		if len(w.inbox) == 0 {
-			w.mu.Unlock()
-			return
-		}
-		batch := w.inbox
-		w.inbox = nil
+	w.mu.Lock()
+	if len(w.inbox) == 0 {
 		w.mu.Unlock()
-		for _, segment := range batch {
-			w.accept(segment)
-		}
+		return
+	}
+	batch := w.inbox
+	w.inbox = nil
+	w.mu.Unlock()
+	for _, segment := range batch {
+		w.accept(segment)
 	}
 }
 
@@ -272,14 +288,13 @@ func (w *Worker) accept(segment store.Segment) {
 	}
 	w.open = append(w.open, segment)
 	w.openChars += textLength(segment.Text)
+	w.openDirty = true
 }
 
 func (w *Worker) continues(segment store.Segment) bool {
 	opts := w.runOpts.withDefaults()
 	prev := w.open[len(w.open)-1]
-	gap := segment.StartedAt.Sub(prev.EndedAt)
 	return segment.Speaker == prev.Speaker &&
-		gap <= opts.IdleTimeout &&
 		len(w.open)+1 <= opts.MaxSegments &&
 		w.openChars+textLength(segment.Text) <= opts.MaxChars
 }
@@ -289,21 +304,19 @@ func (w *Worker) closeOpen() {
 		return
 	}
 	run := w.open
+	dirty := w.openDirty
 	w.open = nil
 	w.openChars = 0
-	w.high = append(w.high, job{run: run})
-}
-
-func (w *Worker) openDeadline() (time.Time, bool) {
-	if len(w.open) == 0 {
-		return time.Time{}, false
+	w.openDirty = false
+	if !dirty && coveredBySource(run, w.opts.Store.Coverage(), false) {
+		return
 	}
-	return w.open[len(w.open)-1].EndedAt.Add(w.runOpts.withDefaults().IdleTimeout), true
+	w.high = append(w.high, job{run: run})
 }
 
 func (w *Worker) process(ctx context.Context, job job) {
 	run := job.run
-	if len(run) == 0 || w.covered(run) {
+	if len(run) == 0 {
 		return
 	}
 
@@ -322,8 +335,10 @@ func (w *Worker) process(ctx context.Context, job job) {
 			result, err := w.opts.Grouper.Group(callCtx, texts)
 			cancel()
 			if err == nil {
-				if verifyErr := ValidateGroups(result, len(texts)); verifyErr != nil {
-					err = fmt.Errorf("%w: %v", ErrInvalidGrouping, verifyErr)
+				var changed bool
+				result, changed, err = normalizeGroups(result, len(texts))
+				if err == nil && changed {
+					w.opts.Logf("段落边界缺口已自动补齐: segments=%d groups=%d", len(texts), len(result))
 				}
 			}
 			if ctx.Err() != nil {
@@ -357,11 +372,6 @@ func (w *Worker) process(ctx context.Context, job job) {
 	}
 }
 
-func (w *Worker) covered(run []store.Segment) bool {
-	coverage := w.opts.Store.Coverage()
-	return coveredBySource(run, coverage, false)
-}
-
 func (w *Worker) cooling() bool {
 	return w.clock.Now().Before(w.failUntil)
 }
@@ -390,6 +400,14 @@ func (w *Worker) fire(paragraph Paragraph) {
 	if fn != nil {
 		fn(paragraph)
 	}
+}
+
+func normalizeGroups(groups []Group, n int) ([]Group, bool, error) {
+	repaired, changed, err := NormalizeGroups(groups, n)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: %v", ErrInvalidGrouping, err)
+	}
+	return repaired, changed, nil
 }
 
 func coveredBySource(run []store.Segment, coverage map[string]string, fallbackCounts bool) bool {
@@ -454,9 +472,7 @@ func Rebuild(ctx context.Context, paragraphStore *Store, segments []store.Segmen
 				result, err := grouper.Group(callCtx, texts)
 				cancel()
 				if err == nil {
-					if verifyErr := ValidateGroups(result, len(texts)); verifyErr != nil {
-						err = fmt.Errorf("%w: %v", ErrInvalidGrouping, verifyErr)
-					}
+					result, _, err = normalizeGroups(result, len(texts))
 				}
 				if err != nil {
 					if ctx.Err() != nil {

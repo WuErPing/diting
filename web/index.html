@@ -48,6 +48,37 @@
           <p class="technical-note">16 kHz&nbsp;&nbsp;·&nbsp;&nbsp;MONO&nbsp;&nbsp;·&nbsp;&nbsp;ON DEVICE</p>
         </section>
 
+        <section class="archive-panel" aria-labelledby="archiveTitle">
+          <h2 id="archiveTitle">全部归档</h2>
+          <dl class="stats">
+            <div><dt>录音</dt><dd><span id="archiveFiles">—</span> 个</dd></div>
+            <div><dt>占用</dt><dd id="archiveSize">—</dd></div>
+            <div><dt>文字</dt><dd><span id="archiveChars">—</span> 字</dd></div>
+          </dl>
+        </section>
+
+        <section class="calendar-panel" aria-labelledby="calendarTitle">
+          <div class="calendar-head">
+            <h2 id="calendarTitle">按天归档</h2>
+            <div class="calendar-nav">
+              <button class="calendar-nav-button" id="calendarPrev" type="button" aria-label="上一个月">‹</button>
+              <span class="calendar-month" id="calendarMonth" aria-live="polite"></span>
+              <button class="calendar-nav-button" id="calendarNext" type="button" aria-label="下一个月">›</button>
+            </div>
+          </div>
+          <div class="calendar-grid" id="calendarGrid"></div>
+          <div class="calendar-detail" id="calendarDetail" hidden>
+            <p class="calendar-detail-date" id="calendarDetailDate"></p>
+            <dl class="stats calendar-detail-stats">
+              <div><dt>记录</dt><dd><span id="calendarDetailSegments">0</span> 段</dd></div>
+              <div><dt>文字</dt><dd><span id="calendarDetailChars">0</span> 字</dd></div>
+              <div><dt>录音</dt><dd><span id="calendarDetailFiles">0</span> 个</dd></div>
+              <div><dt>占用</dt><dd id="calendarDetailSize">0 B</dd></div>
+            </dl>
+            <button class="danger-button" id="calendarDeleteButton" type="button">移到废纸篓</button>
+          </div>
+        </section>
+
         <section class="privacy-panel" aria-labelledby="privacyTitle">
           <h2 id="privacyTitle">声音不出本机</h2>
           <p>检测、识别和保存都在这台电脑上完成。临时文字会随识别变化，语句结束后才写入记录。</p>
@@ -61,6 +92,7 @@
             <h2 id="liveTitle">此刻</h2>
           </div>
           <div class="transcript-actions">
+            <button class="text-button" id="lexiconButton" type="button">术语表</button>
             <button class="text-button" id="showPreviewButton" type="button" hidden>显示文稿</button>
             <button class="text-button" id="refreshButton" type="button">刷新记录</button>
           </div>
@@ -116,16 +148,63 @@
     <li class="segment-item">
       <div class="timeline-node" aria-hidden="true"></div>
       <div class="segment-meta">
-        <span class="segment-speaker" hidden></span>
+        <button class="segment-speaker" type="button" hidden></button>
         <time class="segment-time"></time>
         <span class="segment-duration"></span>
       </div>
       <p class="segment-text"></p>
       <div class="segment-actions">
         <audio controls preload="none"></audio>
-        <a class="download-link" download>下载 WAV</a>
+        <a class="download-link" download>下载录音</a>
       </div>
     </li>
   </template>
+
+  <dialog class="dialog" id="deleteDialog" aria-labelledby="deleteDialogTitle">
+    <form class="dialog-form" id="deleteForm" method="dialog">
+      <h2 id="deleteDialogTitle">移到废纸篓？</h2>
+      <p id="deleteDialogText"></p>
+      <p class="dialog-hint">当天的转录文字会一并删除，录音目录会移到废纸篓。此操作无法在页面内撤销。</p>
+      <p class="dialog-error" id="deleteDialogError" hidden></p>
+      <div class="dialog-actions">
+        <button class="text-button" id="deleteCancel" type="button">取消</button>
+        <button class="danger-button" id="deleteConfirm" type="submit">移到废纸篓</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="dialog" id="speakerDialog" aria-labelledby="speakerDialogTitle">
+    <form class="dialog-form" id="speakerForm" method="dialog">
+      <h2 id="speakerDialogTitle">标注说话人</h2>
+      <p class="dialog-hint">稳定标签：<span id="speakerDialogLabel"></span></p>
+      <label class="field">
+        <span>显示名</span>
+        <input id="speakerAliasInput" type="text" maxlength="32" autocomplete="off" placeholder="例如：章总">
+      </label>
+      <p class="dialog-hint">留空可清除人名，恢复显示稳定标签。只影响显示，不改写历史记录。</p>
+      <p class="dialog-error" id="speakerDialogError" hidden></p>
+      <div class="dialog-actions">
+        <button class="text-button" id="speakerCancel" type="button">取消</button>
+        <button class="primary-button dialog-submit" id="speakerSave" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="dialog" id="lexiconDialog" aria-labelledby="lexiconDialogTitle">
+    <form class="dialog-form" id="lexiconForm" method="dialog">
+      <h2 id="lexiconDialogTitle">术语表</h2>
+      <p class="dialog-hint">每行一条“识别词=正确词”，例如 <code>张总=章总</code>。以 <code>#</code> 开头的行会被忽略。</p>
+      <label class="field">
+        <span>替换规则</span>
+        <textarea id="lexiconInput" rows="10" spellcheck="false" placeholder="张总=章总"></textarea>
+      </label>
+      <p class="dialog-hint">仅影响之后的新转录；历史记录可用 <code>-retranscribe</code> 重新生成。</p>
+      <p class="dialog-error" id="lexiconError" hidden></p>
+      <div class="dialog-actions">
+        <button class="text-button" id="lexiconCancel" type="button">取消</button>
+        <button class="primary-button dialog-submit" id="lexiconSave" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>

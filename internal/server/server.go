@@ -10,38 +10,75 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"diting/internal/engine"
+	"diting/internal/lexicon"
 	"diting/internal/paragraph"
+	"diting/internal/speaker"
 	"diting/internal/store"
 )
 
-var segmentIDPattern = regexp.MustCompile(`^\d{8}-\d{6}\.\d{9}$`)
+var (
+	segmentIDPattern    = regexp.MustCompile(`^\d{8}-\d{6}\.\d{9}$`)
+	speakerLabelPattern = regexp.MustCompile(`^说话人\d+$`)
+)
+
+const statsCacheTTL = 3 * time.Second
+
+type SpeakerDirectory interface {
+	Speakers() []speaker.View
+	SpeakerName(label string) string
+	SetSpeakerAlias(label, alias string) error
+}
 
 type Server struct {
-	engine     *engine.Engine
-	store      *store.Store
-	paragraphs *paragraph.Store
-	merge      bool
-	hub        *eventHub
-	mux        *http.ServeMux
+	engine          *engine.Engine
+	store           *store.Store
+	paragraphs      *paragraph.Store
+	merge           bool
+	lexicon         *lexicon.Lexicon
+	speakers        SpeakerDirectory
+	onArchiveChange func()
+	hub             *eventHub
+	mux             *http.ServeMux
+
+	statsMu sync.Mutex
+	statsAt time.Time
+	stats   store.Stats
 }
 
 func New(ctx context.Context, recognizer *engine.Engine, segmentStore *store.Store,
-	paragraphs *paragraph.Store, merge bool, assets fs.FS) *Server {
+	paragraphs *paragraph.Store, merge bool, lex *lexicon.Lexicon,
+	onArchiveChange func(), assets fs.FS) *Server {
 	s := &Server{
-		engine:     recognizer,
-		store:      segmentStore,
-		paragraphs: paragraphs,
-		merge:      merge,
-		hub:        newEventHub(ctx, recognizer.Events()),
-		mux:        http.NewServeMux(),
+		engine:          recognizer,
+		store:           segmentStore,
+		paragraphs:      paragraphs,
+		merge:           merge,
+		lexicon:         lex,
+		onArchiveChange: onArchiveChange,
+		mux:             http.NewServeMux(),
+	}
+	if recognizer != nil {
+		s.speakers = recognizer
+		s.hub = newEventHub(ctx, recognizer.Events(), s.speakerName)
+	} else {
+		s.hub = newEventHub(ctx, nil, s.speakerName)
 	}
 	s.mux.HandleFunc("GET /api/status", s.handleStatus)
+	s.mux.HandleFunc("GET /api/stats", s.handleStats)
+	s.mux.HandleFunc("GET /api/days", s.handleDays)
+	s.mux.HandleFunc("DELETE /api/days/{date}", s.handleDeleteDay)
+	s.mux.HandleFunc("GET /api/speakers", s.handleSpeakers)
+	s.mux.HandleFunc("PATCH /api/speakers/{label}", s.handleSpeakerAlias)
+	s.mux.HandleFunc("GET /api/lexicon", s.handleLexicon)
+	s.mux.HandleFunc("PUT /api/lexicon", s.handleLexiconUpdate)
 	s.mux.HandleFunc("PUT /api/capture", s.handleCapture)
 	s.mux.HandleFunc("GET /api/segments", s.handleSegments)
 	s.mux.HandleFunc("GET /api/segments/{id}/audio", s.handleAudio)
@@ -91,6 +128,41 @@ type statusResponse struct {
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.currentStatus())
+}
+
+type statsResponse struct {
+	store.Stats
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
+	stats, updatedAt, err := s.archiveStats()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "STATS_FAILED", "无法统计归档数据")
+		return
+	}
+	writeJSON(w, http.StatusOK, statsResponse{Stats: stats, UpdatedAt: updatedAt})
+}
+
+func (s *Server) archiveStats() (store.Stats, time.Time, error) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	if !s.statsAt.IsZero() && time.Since(s.statsAt) < statsCacheTTL {
+		return s.stats, s.statsAt, nil
+	}
+	stats, err := s.store.Stats()
+	if err != nil {
+		return store.Stats{}, time.Time{}, err
+	}
+	s.stats = stats
+	s.statsAt = time.Now()
+	return stats, s.statsAt, nil
+}
+
+func (s *Server) invalidateStats() {
+	s.statsMu.Lock()
+	s.statsAt = time.Time{}
+	s.statsMu.Unlock()
 }
 
 func (s *Server) currentStatus() statusResponse {
@@ -160,14 +232,33 @@ func (s *Server) handleSegments(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	segments := s.store.List(limit, before)
+	views := make([]segmentView, len(segments))
+	for i, segment := range segments {
+		views[i] = segmentView{Segment: segment, SpeakerName: s.speakerName(segment.Speaker)}
+	}
 	response := struct {
-		Data       []store.Segment `json:"data"`
-		NextBefore string          `json:"nextBefore,omitempty"`
-	}{Data: segments}
+		Data       []segmentView `json:"data"`
+		NextBefore string        `json:"nextBefore,omitempty"`
+	}{Data: views}
 	if len(segments) == limit {
 		response.NextBefore = segments[len(segments)-1].StartedAt.Format(time.RFC3339Nano)
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+type segmentView struct {
+	store.Segment
+	SpeakerName string `json:"speakerName,omitempty"`
+}
+
+func (s *Server) speakerName(label string) string {
+	if label == "" || s.speakers == nil {
+		return label
+	}
+	if name := s.speakers.SpeakerName(label); name != "" {
+		return name
+	}
+	return label
 }
 
 func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
@@ -185,8 +276,8 @@ func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "AUDIO_READ_FAILED", "无法读取录音")
 		return
 	}
-	w.Header().Set("Content-Type", "audio/wav")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", id+".wav"))
+	w.Header().Set("Content-Type", store.AudioMIME(path))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", filepath.Base(path)))
 	http.ServeFile(w, r, path)
 }
 

@@ -187,3 +187,26 @@ func TestStoreReplaceDropsEmptyAndOverlapping(t *testing.T) {
 		t.Fatalf("ids = %v", ids)
 	}
 }
+
+func TestStoreRemoveSegmentsDropsIntersectingParagraphs(t *testing.T) {
+	store := openTestStore(t)
+	if err := store.SaveMany([]Paragraph{
+		testParagraph("a", testBase, "a1", "a2"),
+		testParagraph("b", testBase.Add(time.Minute), "b1"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := store.RemoveSegments(map[string]struct{}{"a2": {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	if ids := paragraphIDs(store.All()); len(ids) != 1 || ids[0] != "b" {
+		t.Fatalf("ids = %v", ids)
+	}
+	if removed, err := store.RemoveSegments(map[string]struct{}{"missing": {}}); err != nil || removed != 0 {
+		t.Fatalf("missing removal = %d, %v", removed, err)
+	}
+}

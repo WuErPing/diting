@@ -119,7 +119,9 @@ func TestParseGroupsVariants(t *testing.T) {
 		{"top level array", `[{"start":1,"end":3}]`, 3, nil, false},
 		{"empty content", `   `, 3, nil, false},
 		{"invalid json", `{"paragraphs":`, 3, nil, false},
-		{"partial coverage", `{"paragraphs":[{"start":1,"end":2}]}`, 3, nil, false},
+		{"trailing gap", `{"paragraphs":[{"start":1,"end":2}]}`, 3, []Group{{1, 3}}, true},
+		{"gap between groups", `{"paragraphs":[{"start":1,"end":3},{"start":5,"end":6}]}`, 6, []Group{{1, 3}, {4, 6}}, true},
+		{"overlap", `{"paragraphs":[{"start":1,"end":2},{"start":2,"end":3}]}`, 3, nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -145,6 +147,22 @@ func TestParseGroupsVariants(t *testing.T) {
 	}
 }
 
+func TestClientGroupRepairsGap(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(chatCompletion(`{"paragraphs":[{"start":1,"end":3},{"start":5,"end":6}]}`, "stop")))
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{BaseURL: server.URL, Model: "m"})
+	groups, err := client.Group(context.Background(), []string{"一", "二", "三", "四", "五", "六"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 2 || groups[0] != (Group{Start: 1, End: 3}) || groups[1] != (Group{Start: 4, End: 6}) {
+		t.Fatalf("groups = %v", groups)
+	}
+}
+
 func TestClientGroupErrors(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -155,7 +173,7 @@ func TestClientGroupErrors(t *testing.T) {
 		{"http error", http.StatusInternalServerError, "", "stop"},
 		{"truncated", http.StatusOK, `{"paragraphs":[]}`, "length"},
 		{"no choices", http.StatusOK, "", "stop"},
-		{"invalid groups", http.StatusOK, `{"paragraphs":[{"start":2,"end":3}]}`, "stop"},
+		{"invalid groups", http.StatusOK, `{"paragraphs":[{"start":2,"end":3},{"start":1,"end":1}]}`, "stop"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -224,7 +242,7 @@ func TestClientGroupTimeout(t *testing.T) {
 
 func TestClientGroupClassifiesErrors(t *testing.T) {
 	invalid := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(chatCompletion(`{"paragraphs":[{"start":2,"end":3}]}`, "stop")))
+		_, _ = w.Write([]byte(chatCompletion(`{"paragraphs":[{"start":1,"end":4}]}`, "stop")))
 	}))
 	_, err := NewClient(ClientConfig{BaseURL: invalid.URL, Model: "m"}).Group(context.Background(), []string{"一", "二", "三"})
 	invalid.Close()

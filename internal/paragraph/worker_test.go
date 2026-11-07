@@ -13,16 +13,8 @@ import (
 )
 
 type fakeClock struct {
-	mu     sync.Mutex
-	now    time.Time
-	timers []*fakeTimer
-}
-
-type fakeTimer struct {
-	clock   *fakeClock
-	ch      chan time.Time
-	at      time.Time
-	stopped bool
+	mu  sync.Mutex
+	now time.Time
 }
 
 func newFakeClock(now time.Time) *fakeClock {
@@ -35,70 +27,10 @@ func (c *fakeClock) Now() time.Time {
 	return c.now
 }
 
-func (c *fakeClock) NewTimer(d time.Duration) Timer {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	timer := &fakeTimer{clock: c, ch: make(chan time.Time, 1), at: c.now.Add(d)}
-	if d <= 0 {
-		timer.fire(c.now)
-		timer.stopped = true
-		return timer
-	}
-	c.timers = append(c.timers, timer)
-	return timer
-}
-
 func (c *fakeClock) Advance(d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.now = c.now.Add(d)
-	remaining := c.timers[:0]
-	for _, timer := range c.timers {
-		if timer.stopped {
-			continue
-		}
-		if !timer.at.After(c.now) {
-			timer.fire(c.now)
-			timer.stopped = true
-			continue
-		}
-		remaining = append(remaining, timer)
-	}
-	c.timers = remaining
-}
-
-func (t *fakeTimer) fire(now time.Time) {
-	select {
-	case t.ch <- now:
-	default:
-	}
-}
-
-func (t *fakeTimer) C() <-chan time.Time {
-	return t.ch
-}
-
-func (t *fakeTimer) Stop() bool {
-	t.clock.mu.Lock()
-	defer t.clock.mu.Unlock()
-	wasActive := !t.stopped
-	t.stopped = true
-	return wasActive
-}
-
-func (t *fakeTimer) Reset(d time.Duration) bool {
-	t.clock.mu.Lock()
-	defer t.clock.mu.Unlock()
-	wasActive := !t.stopped
-	t.stopped = false
-	t.at = t.clock.now.Add(d)
-	if d <= 0 {
-		t.fire(t.clock.now)
-		t.stopped = true
-		return wasActive
-	}
-	t.clock.timers = append(t.clock.timers, t)
-	return wasActive
 }
 
 type fakeGrouper struct {
@@ -154,57 +86,76 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 func newTestWorker(t *testing.T, clock *fakeClock, paragraphStore *Store, segments SegmentSource, grouper Grouper) *Worker {
 	t.Helper()
 	return NewWorker(WorkerOptions{
-		Store:       paragraphStore,
-		Segments:    segments,
-		Grouper:     grouper,
-		Model:       "test-model",
-		Clock:       clock,
-		IdleTimeout: 60 * time.Second,
-		Logf:        quietLogf,
+		Store:    paragraphStore,
+		Segments: segments,
+		Grouper:  grouper,
+		Model:    "test-model",
+		Clock:    clock,
+		Logf:     quietLogf,
 	})
 }
 
-func TestWorkerMergesAfterIdleTimeout(t *testing.T) {
+func TestWorkerMergesOnEverySegment(t *testing.T) {
 	clock := newFakeClock(testBase)
 	paragraphStore := openTestStore(t)
 	grouper := &fakeGrouper{}
 	worker := newTestWorker(t, clock, paragraphStore, nil, grouper)
-	events := make(chan Paragraph, 4)
+	events := make(chan Paragraph, 8)
 	worker.SetOnParagraph(func(p Paragraph) { events <- p })
 	worker.Start(context.Background())
 	defer worker.Close()
 
 	worker.Notify(testSegment("a", "说话人1", "你好", testBase, testBase.Add(time.Second)))
+	waitFor(t, "first paragraph", func() bool { return len(paragraphStore.All()) == 1 })
+	first := paragraphStore.All()[0]
+	if first.ID != "a" || first.Source != SourceSingle {
+		t.Fatalf("first paragraph = %+v", first)
+	}
+
 	worker.Notify(testSegment("b", "说话人1", "世界", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
-
-	clock.Advance(59 * time.Second)
-	time.Sleep(50 * time.Millisecond)
-	if got := paragraphStore.All(); len(got) != 0 {
-		t.Fatalf("merged before idle timeout: %v", got)
-	}
-	clock.Advance(2 * time.Second)
-	time.Sleep(50 * time.Millisecond)
-	if got := paragraphStore.All(); len(got) != 0 {
-		t.Fatalf("merged before 60s idle: %v", got)
-	}
-
-	clock.Advance(2 * time.Second)
-	waitFor(t, "merged paragraph", func() bool { return len(paragraphStore.All()) == 1 })
+	waitFor(t, "merged paragraph", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 1 && all[0].Source == SourceLLM && len(all[0].SegmentIDs) == 2
+	})
 
 	paragraph := paragraphStore.All()[0]
-	if paragraph.Text != "你好世界" || paragraph.Source != SourceLLM || paragraph.Model != "test-model" {
+	if paragraph.Text != "你好世界" || paragraph.Model != "test-model" {
 		t.Fatalf("paragraph = %+v", paragraph)
+	}
+	if !reflect.DeepEqual(paragraph.SegmentIDs, []string{"a", "b"}) {
+		t.Fatalf("segment ids = %v", paragraph.SegmentIDs)
 	}
 	if grouper.count() != 1 {
 		t.Fatalf("model calls = %d", grouper.count())
 	}
 	select {
-	case event := <-events:
-		if event.ID != paragraph.ID {
-			t.Fatalf("event = %+v", event)
-		}
+	case <-events:
 	case <-time.After(time.Second):
 		t.Fatal("paragraph event not fired")
+	}
+}
+
+func TestWorkerMergesLongPausesWithoutSegment(t *testing.T) {
+	clock := newFakeClock(testBase)
+	paragraphStore := openTestStore(t)
+	grouper := &fakeGrouper{}
+	worker := newTestWorker(t, clock, paragraphStore, nil, grouper)
+	worker.Start(context.Background())
+	defer worker.Close()
+
+	worker.Notify(testSegment("a", "说话人1", "一", testBase, testBase.Add(time.Second)))
+	waitFor(t, "first paragraph", func() bool { return len(paragraphStore.All()) == 1 })
+
+	later := testBase.Add(time.Hour)
+	worker.Notify(testSegment("b", "说话人1", "二", later, later.Add(time.Second)))
+	waitFor(t, "merged across pause", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 1 && len(all[0].SegmentIDs) == 2
+	})
+
+	// No timer should fire on its own: only the new segment triggers merging.
+	if grouper.count() != 1 {
+		t.Fatalf("model calls = %d", grouper.count())
 	}
 }
 
@@ -217,15 +168,19 @@ func TestWorkerMergesOnSpeakerChange(t *testing.T) {
 	defer worker.Close()
 
 	worker.Notify(testSegment("a", "说话人1", "一", testBase, testBase.Add(time.Second)))
+	waitFor(t, "first paragraph", func() bool { return len(paragraphStore.All()) == 1 })
 	worker.Notify(testSegment("b", "说话人2", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
 
-	waitFor(t, "first paragraph", func() bool { return len(paragraphStore.All()) == 1 })
-	paragraph := paragraphStore.All()[0]
-	if paragraph.ID != "a" || paragraph.Source != SourceSingle || paragraph.Text != "一" {
-		t.Fatalf("paragraph = %+v", paragraph)
+	waitFor(t, "second paragraph", func() bool { return len(paragraphStore.All()) == 2 })
+	all := paragraphStore.All()
+	if all[0].ID != "a" || all[0].Source != SourceSingle || all[0].Text != "一" {
+		t.Fatalf("first paragraph = %+v", all[0])
+	}
+	if all[1].ID != "b" || all[1].Source != SourceSingle || all[1].Text != "二" {
+		t.Fatalf("second paragraph = %+v", all[1])
 	}
 	if grouper.count() != 0 {
-		t.Fatalf("single segment should not call model")
+		t.Fatalf("single segments should not call model")
 	}
 }
 
@@ -246,20 +201,27 @@ func TestWorkerCapsTriggerMerge(t *testing.T) {
 			opts.Store = paragraphStore
 			opts.Grouper = grouper
 			opts.Clock = clock
-			opts.IdleTimeout = 60 * time.Second
 			opts.Logf = quietLogf
 			worker := NewWorker(opts)
 			worker.Start(context.Background())
 			defer worker.Close()
 
 			worker.Notify(testSegment("a", "说话人1", "你好", testBase, testBase.Add(time.Second)))
+			waitFor(t, "first paragraph", func() bool { return len(paragraphStore.All()) == 1 })
 			worker.Notify(testSegment("b", "说话人1", "世界", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
-			worker.Notify(testSegment("c", "说话人1", "再见", testBase.Add(4*time.Second), testBase.Add(5*time.Second)))
+			waitFor(t, "capped merge", func() bool {
+				all := paragraphStore.All()
+				return len(all) == 1 && len(all[0].SegmentIDs) == 2
+			})
 
-			waitFor(t, "capped paragraph", func() bool { return len(paragraphStore.All()) == 1 })
-			paragraph := paragraphStore.All()[0]
-			if paragraph.Text != "你好世界" || !reflect.DeepEqual(paragraph.SegmentIDs, []string{"a", "b"}) {
-				t.Fatalf("paragraph = %+v", paragraph)
+			worker.Notify(testSegment("c", "说话人1", "再见", testBase.Add(4*time.Second), testBase.Add(5*time.Second)))
+			waitFor(t, "closed by cap", func() bool { return len(paragraphStore.All()) == 2 })
+			all := paragraphStore.All()
+			if all[0].Text != "你好世界" || !reflect.DeepEqual(all[0].SegmentIDs, []string{"a", "b"}) {
+				t.Fatalf("first paragraph = %+v", all[0])
+			}
+			if all[1].ID != "c" || all[1].Source != SourceSingle {
+				t.Fatalf("second paragraph = %+v", all[1])
 			}
 			if grouper.count() != 1 {
 				t.Fatalf("model calls = %d", grouper.count())
@@ -271,38 +233,52 @@ func TestWorkerCapsTriggerMerge(t *testing.T) {
 func TestWorkerFallsBackAndCoolsDown(t *testing.T) {
 	clock := newFakeClock(testBase)
 	paragraphStore := openTestStore(t)
-	grouper := &fakeGrouper{fn: func(int, context.Context, []string) ([]Group, error) {
-		return nil, errors.New("model down")
+	grouper := &fakeGrouper{fn: func(call int, _ context.Context, texts []string) ([]Group, error) {
+		if call == 1 {
+			return nil, errors.New("model down")
+		}
+		return []Group{{Start: 1, End: len(texts)}}, nil
 	}}
 	worker := newTestWorker(t, clock, paragraphStore, nil, grouper)
 	worker.Start(context.Background())
 	defer worker.Close()
 
 	worker.Notify(testSegment("a1", "说话人1", "一", testBase, testBase.Add(time.Second)))
+	waitFor(t, "single a1", func() bool { return len(paragraphStore.All()) == 1 })
 	worker.Notify(testSegment("a2", "说话人1", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
-	worker.Notify(testSegment("b1", "说话人2", "三", testBase.Add(4*time.Second), testBase.Add(5*time.Second)))
-	worker.Notify(testSegment("b2", "说话人2", "四", testBase.Add(6*time.Second), testBase.Add(7*time.Second)))
-	worker.Notify(testSegment("c1", "说话人3", "五", testBase.Add(8*time.Second), testBase.Add(9*time.Second)))
+	waitFor(t, "a fallback", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 1 && all[0].Source == SourceFallback && len(all[0].SegmentIDs) == 2
+	})
 
-	waitFor(t, "fallback paragraphs", func() bool { return len(paragraphStore.All()) == 2 })
-	for _, paragraph := range paragraphStore.All() {
-		if paragraph.Source != SourceFallback {
-			t.Fatalf("source = %q", paragraph.Source)
-		}
-	}
+	worker.Notify(testSegment("b1", "说话人2", "三", testBase.Add(4*time.Second), testBase.Add(5*time.Second)))
+	waitFor(t, "single b1", func() bool { return len(paragraphStore.All()) == 2 })
+	worker.Notify(testSegment("b2", "说话人2", "四", testBase.Add(6*time.Second), testBase.Add(7*time.Second)))
+	waitFor(t, "b fallback", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 2 && all[1].Source == SourceFallback && len(all[1].SegmentIDs) == 2
+	})
+
 	if grouper.count() != 1 {
 		t.Fatalf("model should be skipped while cooling down, calls = %d", grouper.count())
 	}
 
 	clock.Advance(2*time.Minute + time.Second)
-	waitFor(t, "idle paragraph", func() bool { return len(paragraphStore.All()) == 3 })
+	now := clock.Now()
+	worker.Notify(testSegment("d1", "说话人3", "五", now, now.Add(time.Second)))
+	waitFor(t, "retried b run", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 3 && all[1].Source == SourceLLM
+	})
+	worker.Notify(testSegment("d2", "说话人3", "六", now.Add(2*time.Second), now.Add(3*time.Second)))
 
-	worker.Notify(testSegment("d1", "说话人4", "六", clock.Now().Add(time.Second), clock.Now().Add(2*time.Second)))
-	worker.Notify(testSegment("d2", "说话人4", "七", clock.Now().Add(3*time.Second), clock.Now().Add(4*time.Second)))
-	worker.Notify(testSegment("e1", "说话人5", "八", clock.Now().Add(5*time.Second), clock.Now().Add(6*time.Second)))
-
-	waitFor(t, "post-cooldown paragraph", func() bool { return grouper.count() == 2 })
-	waitFor(t, "post-cooldown paragraphs", func() bool { return len(paragraphStore.All()) == 4 })
+	waitFor(t, "post-cooldown llm", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 3 && all[2].Source == SourceLLM && len(all[2].SegmentIDs) == 2
+	})
+	if grouper.count() != 3 {
+		t.Fatalf("model calls = %d", grouper.count())
+	}
 }
 
 func TestWorkerInvalidGroupingDoesNotCoolDown(t *testing.T) {
@@ -319,16 +295,57 @@ func TestWorkerInvalidGroupingDoesNotCoolDown(t *testing.T) {
 	defer worker.Close()
 
 	worker.Notify(testSegment("a1", "说话人1", "一", testBase, testBase.Add(time.Second)))
+	waitFor(t, "single a1", func() bool { return len(paragraphStore.All()) == 1 })
 	worker.Notify(testSegment("a2", "说话人1", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
-	worker.Notify(testSegment("b1", "说话人2", "三", testBase.Add(4*time.Second), testBase.Add(5*time.Second)))
-	worker.Notify(testSegment("b2", "说话人2", "四", testBase.Add(6*time.Second), testBase.Add(7*time.Second)))
-	worker.Notify(testSegment("c1", "说话人3", "五", testBase.Add(8*time.Second), testBase.Add(9*time.Second)))
+	waitFor(t, "a fallback", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 1 && all[0].Source == SourceFallback
+	})
 
-	waitFor(t, "second model call", func() bool { return grouper.count() == 2 })
-	waitFor(t, "both paragraphs", func() bool { return len(paragraphStore.All()) == 2 })
+	worker.Notify(testSegment("b1", "说话人2", "三", testBase.Add(4*time.Second), testBase.Add(5*time.Second)))
+	waitFor(t, "fallback retried without cooldown", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 2 && all[0].Source == SourceLLM && grouper.count() == 2
+	})
+	worker.Notify(testSegment("b2", "说话人2", "四", testBase.Add(6*time.Second), testBase.Add(7*time.Second)))
+
+	waitFor(t, "second llm paragraph", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 2 && all[1].Source == SourceLLM
+	})
+	if grouper.count() != 3 {
+		t.Fatalf("model calls = %d", grouper.count())
+	}
+}
+
+func TestWorkerRepairsGappedGrouping(t *testing.T) {
+	clock := newFakeClock(testBase)
+	paragraphStore := openTestStore(t)
+	grouper := &fakeGrouper{fn: func(_ int, _ context.Context, texts []string) ([]Group, error) {
+		if len(texts) == 3 {
+			return []Group{{Start: 1, End: 1}, {Start: 3, End: 3}}, nil
+		}
+		return []Group{{Start: 1, End: len(texts)}}, nil
+	}}
+	worker := newTestWorker(t, clock, paragraphStore, nil, grouper)
+	worker.Start(context.Background())
+	defer worker.Close()
+
+	worker.Notify(testSegment("a", "说话人1", "一", testBase, testBase.Add(time.Second)))
+	waitFor(t, "single a", func() bool { return len(paragraphStore.All()) == 1 })
+	worker.Notify(testSegment("b", "说话人1", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
+	worker.Notify(testSegment("c", "说话人1", "三", testBase.Add(4*time.Second), testBase.Add(5*time.Second)))
+
+	waitFor(t, "repaired paragraphs", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 2 && all[0].Source == SourceLLM && all[1].Source == SourceLLM
+	})
 	all := paragraphStore.All()
-	if all[0].Source != SourceFallback || all[1].Source != SourceLLM {
-		t.Fatalf("sources = %q / %q", all[0].Source, all[1].Source)
+	if !reflect.DeepEqual(all[0].SegmentIDs, []string{"a"}) {
+		t.Fatalf("first paragraph = %+v", all[0])
+	}
+	if !reflect.DeepEqual(all[1].SegmentIDs, []string{"b", "c"}) || all[1].Text != "二三" {
+		t.Fatalf("second paragraph = %+v", all[1])
 	}
 }
 
@@ -374,7 +391,7 @@ func TestWorkerBackfillSkipsCoveredAndRetriesFallback(t *testing.T) {
 	}
 }
 
-func TestWorkerBackfillSeedsRecentTail(t *testing.T) {
+func TestWorkerBackfillSeedsOpenTail(t *testing.T) {
 	s1 := testSegment("s1", "说话人1", "一", testBase, testBase.Add(time.Second))
 	s2 := testSegment("s2", "说话人1", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
 	base2 := testBase.Add(10 * time.Minute)
@@ -387,16 +404,21 @@ func TestWorkerBackfillSeedsRecentTail(t *testing.T) {
 	worker.Start(context.Background())
 	defer worker.Close()
 
-	waitFor(t, "backfilled run", func() bool { return len(paragraphStore.All()) == 1 })
+	waitFor(t, "backfilled tail", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 1 && len(all[0].SegmentIDs) == 3
+	})
 
 	s4 := testSegment("s4", "说话人1", "四", s3.EndedAt.Add(2*time.Second), s3.EndedAt.Add(3*time.Second))
 	worker.Notify(s4)
-	clock.Advance(61 * time.Second)
 
-	waitFor(t, "tail merged", func() bool { return len(paragraphStore.All()) == 2 })
+	waitFor(t, "tail extended", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 1 && len(all[0].SegmentIDs) == 4
+	})
 	all := paragraphStore.All()
-	if !reflect.DeepEqual(all[1].SegmentIDs, []string{"s3", "s4"}) || all[1].Text != "三四" {
-		t.Fatalf("tail paragraph = %+v", all[1])
+	if !reflect.DeepEqual(all[0].SegmentIDs, []string{"s1", "s2", "s3", "s4"}) || all[0].Text != "一二三四" {
+		t.Fatalf("tail paragraph = %+v", all[0])
 	}
 	if grouper.count() != 2 {
 		t.Fatalf("model calls = %d", grouper.count())
@@ -409,8 +431,11 @@ func TestWorkerLiveRunsBeforeBackfill(t *testing.T) {
 	base2 := testBase.Add(5 * time.Minute)
 	b1 := testSegment("b1", "说话人2", "旧三", base2, base2.Add(time.Second))
 	b2 := testSegment("b2", "说话人2", "旧四", base2.Add(2*time.Second), base2.Add(3*time.Second))
+	base3 := testBase.Add(10 * time.Minute)
+	c1 := testSegment("c1", "说话人3", "旧五", base3, base3.Add(time.Second))
+	c2 := testSegment("c2", "说话人3", "旧六", base3.Add(2*time.Second), base3.Add(3*time.Second))
 
-	clock := newFakeClock(b2.EndedAt.Add(5 * time.Minute))
+	clock := newFakeClock(base3.Add(5 * time.Minute))
 	firstStarted := make(chan struct{})
 	release := make(chan struct{})
 	grouper := &fakeGrouper{fn: func(call int, ctx context.Context, texts []string) ([]Group, error) {
@@ -422,15 +447,17 @@ func TestWorkerLiveRunsBeforeBackfill(t *testing.T) {
 	}}
 
 	paragraphStore := openTestStore(t)
-	worker := newTestWorker(t, clock, paragraphStore, fakeSegments{a1, a2, b1, b2}, grouper)
+	if err := paragraphStore.SaveMany([]Paragraph{testParagraph("c1", c1.StartedAt, "c1", "c2")}); err != nil {
+		t.Fatal(err)
+	}
+	worker := newTestWorker(t, clock, paragraphStore, fakeSegments{a1, a2, b1, b2, c1, c2}, grouper)
 	worker.Start(context.Background())
 	defer worker.Close()
 
 	<-firstStarted
 	now := clock.Now()
-	worker.Notify(testSegment("l1", "说话人3", "实时一", now, now.Add(time.Second)))
-	worker.Notify(testSegment("l2", "说话人3", "实时二", now.Add(2*time.Second), now.Add(3*time.Second)))
-	worker.Notify(testSegment("l3", "说话人4", "实时三", now.Add(4*time.Second), now.Add(5*time.Second)))
+	worker.Notify(testSegment("l1", "说话人4", "实时一", now, now.Add(time.Second)))
+	worker.Notify(testSegment("l2", "说话人4", "实时二", now.Add(2*time.Second), now.Add(3*time.Second)))
 	close(release)
 
 	waitFor(t, "processed live run", func() bool { return grouper.count() == 3 })
@@ -459,7 +486,6 @@ func TestWorkerCloseCancelsInFlightRequest(t *testing.T) {
 
 	worker.Notify(testSegment("a1", "说话人1", "一", testBase, testBase.Add(time.Second)))
 	worker.Notify(testSegment("a2", "说话人1", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
-	worker.Notify(testSegment("b1", "说话人2", "三", testBase.Add(4*time.Second), testBase.Add(5*time.Second)))
 	<-called
 
 	start := time.Now()
@@ -471,9 +497,6 @@ func TestWorkerCloseCancelsInFlightRequest(t *testing.T) {
 	}
 	if err := worker.Close(); err != nil {
 		t.Fatalf("second close error: %v", err)
-	}
-	if got := paragraphStore.All(); len(got) != 0 {
-		t.Fatalf("paragraphs after cancel = %v", got)
 	}
 }
 
@@ -495,10 +518,10 @@ func TestRebuild(t *testing.T) {
 	one := testSegment("a1", "说话人1", "一", testBase, testBase.Add(time.Second))
 	two := testSegment("a2", "说话人1", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
 	base2 := testBase.Add(5 * time.Minute)
-	three := testSegment("b1", "说话人1", "三", base2, base2.Add(time.Second))
+	three := testSegment("b1", "说话人2", "三", base2, base2.Add(time.Second))
 	base3 := testBase.Add(10 * time.Minute)
-	four := testSegment("c1", "说话人2", "四", base3, base3.Add(time.Second))
-	five := testSegment("c2", "说话人2", "五", base3.Add(2*time.Second), base3.Add(3*time.Second))
+	four := testSegment("c1", "说话人3", "四", base3, base3.Add(time.Second))
+	five := testSegment("c2", "说话人3", "五", base3.Add(2*time.Second), base3.Add(3*time.Second))
 
 	grouper := &fakeGrouper{fn: func(_ int, _ context.Context, texts []string) ([]Group, error) {
 		groups := make([]Group, len(texts))
@@ -545,24 +568,24 @@ func TestRebuild(t *testing.T) {
 func TestRebuildStopsCallingAfterTransportFailure(t *testing.T) {
 	one := testSegment("a1", "说话人1", "一", testBase, testBase.Add(time.Second))
 	two := testSegment("a2", "说话人1", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
-	base2 := testBase.Add(5 * time.Minute)
-	three := testSegment("b1", "说话人1", "三", base2, base2.Add(time.Second))
-	four := testSegment("b2", "说话人1", "四", base2.Add(2*time.Second), base2.Add(3*time.Second))
+	three := testSegment("a3", "说话人1", "三", testBase.Add(4*time.Second), testBase.Add(5*time.Second))
+	four := testSegment("a4", "说话人1", "四", testBase.Add(6*time.Second), testBase.Add(7*time.Second))
 
 	grouper := &fakeGrouper{fn: func(int, context.Context, []string) ([]Group, error) {
 		return nil, errors.New("connection refused")
 	}}
 	paragraphStore := openTestStore(t)
 	stats, err := Rebuild(context.Background(), paragraphStore, []store.Segment{one, two, three, four},
-		grouper, "m", RunOptions{}, newFakeClock(base2), nil)
+		grouper, "m", RunOptions{}, newFakeClock(testBase), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if grouper.count() != 1 {
 		t.Fatalf("model calls = %d, want 1", grouper.count())
 	}
-	if stats.Fallback != 2 || stats.LLM != 0 {
-		t.Fatalf("stats = %+v", stats)
+	want := RebuildStats{Runs: 1, LLM: 0, Single: 0, Fallback: 1, Paragraphs: 1}
+	if stats != want {
+		t.Fatalf("stats = %+v, want %+v", stats, want)
 	}
 }
 
@@ -570,8 +593,8 @@ func TestRebuildRetriesAfterInvalidGrouping(t *testing.T) {
 	one := testSegment("a1", "说话人1", "一", testBase, testBase.Add(time.Second))
 	two := testSegment("a2", "说话人1", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
 	base2 := testBase.Add(5 * time.Minute)
-	three := testSegment("b1", "说话人1", "三", base2, base2.Add(time.Second))
-	four := testSegment("b2", "说话人1", "四", base2.Add(2*time.Second), base2.Add(3*time.Second))
+	three := testSegment("b1", "说话人2", "三", base2, base2.Add(time.Second))
+	four := testSegment("b2", "说话人2", "四", base2.Add(2*time.Second), base2.Add(3*time.Second))
 
 	grouper := &fakeGrouper{fn: func(call int, _ context.Context, texts []string) ([]Group, error) {
 		if call == 1 {
@@ -588,8 +611,9 @@ func TestRebuildRetriesAfterInvalidGrouping(t *testing.T) {
 	if grouper.count() != 2 {
 		t.Fatalf("model calls = %d, want 2", grouper.count())
 	}
-	if stats.Fallback != 1 || stats.LLM != 1 {
-		t.Fatalf("stats = %+v", stats)
+	want := RebuildStats{Runs: 2, LLM: 1, Single: 0, Fallback: 1, Paragraphs: 2}
+	if stats != want {
+		t.Fatalf("stats = %+v, want %+v", stats, want)
 	}
 }
 
@@ -610,4 +634,58 @@ func TestRebuildWithoutGrouperFallsBack(t *testing.T) {
 	if len(all) != 1 || all[0].Source != SourceFallback || all[0].Text != "一二" {
 		t.Fatalf("paragraphs = %+v", all)
 	}
+}
+
+type mutableSegments struct {
+	mu   sync.Mutex
+	list []store.Segment
+}
+
+func (m *mutableSegments) All() ([]store.Segment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]store.Segment(nil), m.list...), nil
+}
+
+func (m *mutableSegments) Replace(list []store.Segment) {
+	m.mu.Lock()
+	m.list = append([]store.Segment(nil), list...)
+	m.mu.Unlock()
+}
+
+func TestWorkerReloadDropsDeletedSegments(t *testing.T) {
+	clock := newFakeClock(testBase)
+	paragraphStore := openTestStore(t)
+	source := &mutableSegments{list: []store.Segment{
+		testSegment("a", "说话人1", "你好", testBase, testBase.Add(time.Second)),
+		testSegment("b", "说话人1", "世界", testBase.Add(2*time.Second), testBase.Add(3*time.Second)),
+	}}
+	grouper := &fakeGrouper{}
+	worker := newTestWorker(t, clock, paragraphStore, source, grouper)
+	worker.Start(context.Background())
+	defer worker.Close()
+
+	waitFor(t, "initial merged paragraph", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 1 && len(all[0].SegmentIDs) == 2
+	})
+
+	source.Replace([]store.Segment{
+		testSegment("b", "说话人1", "世界", testBase.Add(2*time.Second), testBase.Add(3*time.Second)),
+	})
+	if _, err := paragraphStore.RemoveSegments(map[string]struct{}{"a": {}}); err != nil {
+		t.Fatal(err)
+	}
+	worker.Reload()
+
+	waitFor(t, "paragraph rebuilt from surviving segment", func() bool {
+		all := paragraphStore.All()
+		if len(all) != 1 {
+			return false
+		}
+		if len(all[0].SegmentIDs) != 1 || all[0].SegmentIDs[0] != "b" {
+			return false
+		}
+		return all[0].Source == SourceSingle
+	})
 }

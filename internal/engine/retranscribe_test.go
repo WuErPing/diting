@@ -1,6 +1,10 @@
 package engine
 
 import (
+	"bytes"
+	"encoding/binary"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -134,5 +138,111 @@ func TestResolveAudioPathRejectsTraversal(t *testing.T) {
 	}
 	if _, err := resolveAudioPath("/tmp/data", "audio/20261106/a.wav"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRetranscribeDecodesCompressedAudio(t *testing.T) {
+	originalRead := readWave
+	originalConvert := convertToWAV
+	defer func() {
+		readWave = originalRead
+		convertToWAV = originalConvert
+	}()
+
+	converted := ""
+	cleaned := false
+	convertToWAV = func(path string) (string, func(), error) {
+		converted = path
+		return "/tmp/fake-decoded.wav", func() { cleaned = true }, nil
+	}
+	readWave = func(path string) *sherpa.Wave {
+		if path != "/tmp/fake-decoded.wav" {
+			t.Fatalf("readWave path = %q", path)
+		}
+		return &sherpa.Wave{Samples: []float32{0.1}, SampleRate: SampleRate}
+	}
+
+	history := &fakeHistory{
+		root: t.TempDir(),
+		segments: []store.Segment{{
+			ID:         "a",
+			DurationMS: 1000,
+			Text:       "旧文本",
+			AudioPath:  "audio/20261106/a.m4a",
+		}},
+	}
+	stats, err := RetranscribeAll(history, fakeProcessor{text: "新文本", speaker: "说话人1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Updated != 1 || converted != filepath.Join(history.root, "audio/20261106/a.m4a") {
+		t.Fatalf("stats = %+v, converted = %q", stats, converted)
+	}
+	if !cleaned {
+		t.Fatal("decoded temp file was not cleaned up")
+	}
+	if history.rewritten[0].Text != "新文本" {
+		t.Fatalf("rewritten = %+v", history.rewritten[0])
+	}
+}
+
+func TestCanonicalizeWAVRewritesExtensibleHeader(t *testing.T) {
+	const (
+		channels = 1
+		rate     = 16000
+		bits     = 16
+	)
+	samples := make([]byte, 320)
+
+	var fmtPayload [40]byte
+	binary.LittleEndian.PutUint16(fmtPayload[0:2], 0xFFFE)
+	binary.LittleEndian.PutUint16(fmtPayload[2:4], channels)
+	binary.LittleEndian.PutUint32(fmtPayload[4:8], rate)
+	binary.LittleEndian.PutUint32(fmtPayload[8:12], rate*channels*bits/8)
+	binary.LittleEndian.PutUint16(fmtPayload[12:14], channels*bits/8)
+	binary.LittleEndian.PutUint16(fmtPayload[14:16], bits)
+	binary.LittleEndian.PutUint16(fmtPayload[16:18], 22)
+	binary.LittleEndian.PutUint16(fmtPayload[18:20], bits)
+	binary.LittleEndian.PutUint16(fmtPayload[24:26], 1)
+
+	var source bytes.Buffer
+	source.WriteString("RIFF")
+	_ = binary.Write(&source, binary.LittleEndian, uint32(4+8+40+8+len(samples)))
+	source.WriteString("WAVE")
+	source.WriteString("fmt ")
+	_ = binary.Write(&source, binary.LittleEndian, uint32(40))
+	source.Write(fmtPayload[:])
+	source.WriteString("data")
+	_ = binary.Write(&source, binary.LittleEndian, uint32(len(samples)))
+	source.Write(samples)
+
+	path := filepath.Join(t.TempDir(), "extensible.wav")
+	if err := os.WriteFile(path, source.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := canonicalizeWAV(path); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 12+8+16+8+len(samples) {
+		t.Fatalf("size = %d", len(got))
+	}
+	if string(got[12:16]) != "fmt " || binary.LittleEndian.Uint32(got[16:20]) != 16 {
+		t.Fatalf("fmt chunk = %q size %d", got[12:16], binary.LittleEndian.Uint32(got[16:20]))
+	}
+	fmtChunk := got[20:36]
+	if binary.LittleEndian.Uint16(fmtChunk[0:2]) != 1 ||
+		binary.LittleEndian.Uint16(fmtChunk[2:4]) != channels ||
+		binary.LittleEndian.Uint32(fmtChunk[4:8]) != rate ||
+		binary.LittleEndian.Uint16(fmtChunk[12:14]) != channels*bits/8 ||
+		binary.LittleEndian.Uint16(fmtChunk[14:16]) != bits {
+		t.Fatalf("fmt chunk = % x", fmtChunk)
+	}
+	if string(got[36:40]) != "data" || !bytes.Equal(got[44:], samples) {
+		t.Fatalf("data chunk mismatch")
 	}
 }
