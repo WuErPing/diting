@@ -26,14 +26,25 @@ func reconcileTranscript(offline, online string, secondary ...string) string {
 	if len(secondary) > 0 {
 		alternative := strings.TrimSpace(secondary[0])
 		if alternative != "" && !hasPunctuation(alternative) && containsHan(alternative) &&
-			onlineComparable == compactText(alternative) && editDistanceWithin(offlineComparable, onlineComparable, 2) <= 2 {
+			onlineComparable == compactText(alternative) && editDistanceWithin(offlineComparable, onlineComparable, 2) <= 2 &&
+			!droppedLeadingText(offlineComparable, onlineComparable) {
 			return online + suffix
 		}
 	}
-	if editDistanceWithin(offlineComparable, onlineComparable, 1) == 1 {
+	if editDistanceWithin(offlineComparable, onlineComparable, 1) == 1 && !droppedLeadingText(offlineComparable, onlineComparable) {
 		return online + suffix
 	}
 	return offline
+}
+
+// droppedLeadingText reports whether online is offline with leading characters
+// removed. Streaming recognizers often miss the first syllables before their
+// encoder warms up, so offline wins in that case even when streamings agree.
+func droppedLeadingText(offline, online string) bool {
+	offlineRunes := []rune(offline)
+	onlineRunes := []rune(online)
+	return len(onlineRunes) > 0 && len(onlineRunes) < len(offlineRunes) &&
+		string(offlineRunes[len(offlineRunes)-len(onlineRunes):]) == online
 }
 
 func terminalPunctuation(text string) (string, string) {

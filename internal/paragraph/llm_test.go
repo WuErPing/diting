@@ -293,3 +293,99 @@ func TestClientModelDefault(t *testing.T) {
 		t.Fatalf("model = %q", client.Model())
 	}
 }
+
+func TestClientCorrectSendsExpectedRequest(t *testing.T) {
+	var raw []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ = io.ReadAll(r.Body)
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(chatCompletion(`{"texts":["摘要总结。","第二句。"]}`, "stop")))
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{BaseURL: server.URL + "/v1", Model: "test-model"})
+	corrected, err := client.Correct(context.Background(), []string{"在要总结。", "第二句。"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(corrected) != 2 || corrected[0] != "摘要总结。" || corrected[1] != "第二句。" {
+		t.Fatalf("corrected = %v", corrected)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["temperature"] != float64(0) {
+		t.Fatalf("sampling = %v", body["temperature"])
+	}
+	if _, ok := body["reasoning_effort"]; ok {
+		t.Fatalf("correction must keep thinking enabled: %v", body["reasoning_effort"])
+	}
+	format, _ := body["response_format"].(map[string]any)
+	schema, _ := format["json_schema"].(map[string]any)
+	props, _ := schema["schema"].(map[string]any)["properties"].(map[string]any)
+	texts, _ := props["texts"].(map[string]any)
+	if texts["minItems"] != float64(2) || texts["maxItems"] != float64(2) {
+		t.Fatalf("texts schema = %v", texts)
+	}
+	messages, _ := body["messages"].([]any)
+	system, _ := messages[0].(map[string]any)
+	if !strings.Contains(system["content"].(string), "校对助手") {
+		t.Fatalf("system = %v", system["content"])
+	}
+	user, _ := messages[1].(map[string]any)
+	prompt := user["content"].(string)
+	var decoded []string
+	if err := json.Unmarshal([]byte(prompt), &decoded); err != nil {
+		t.Fatalf("user content is not a JSON array: %s", prompt)
+	}
+	if len(decoded) != 2 || decoded[0] != "在要总结。" || decoded[1] != "第二句。" {
+		t.Fatalf("prompt texts = %v", decoded)
+	}
+}
+
+func TestClientCorrectClassifiesErrors(t *testing.T) {
+	mismatch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(chatCompletion(`{"texts":["只有一句"]}`, "stop")))
+	}))
+	_, err := NewClient(ClientConfig{BaseURL: mismatch.URL, Model: "m"}).Correct(context.Background(), []string{"一", "二"})
+	mismatch.Close()
+	if !errors.Is(err, ErrInvalidCorrection) {
+		t.Fatalf("count mismatch error = %v", err)
+	}
+
+	truncated := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(chatCompletion(`{"texts":["一"]}`, "length")))
+	}))
+	_, err = NewClient(ClientConfig{BaseURL: truncated.URL, Model: "m"}).Correct(context.Background(), []string{"一"})
+	truncated.Close()
+	if !errors.Is(err, ErrInvalidCorrection) {
+		t.Fatalf("truncated error = %v", err)
+	}
+
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	downURL := down.URL
+	down.Close()
+	_, err = NewClient(ClientConfig{BaseURL: downURL, Model: "m", Timeout: 100 * time.Millisecond}).Correct(context.Background(), []string{"一"})
+	if err == nil || errors.Is(err, ErrInvalidCorrection) {
+		t.Fatalf("transport error = %v", err)
+	}
+}
+
+func TestClientCorrectParsesFencedReply(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(chatCompletion("```json\n{\"texts\":[\"摘要总结。\"]}\n```", "stop")))
+	}))
+	defer server.Close()
+
+	corrected, err := NewClient(ClientConfig{BaseURL: server.URL, Model: "m"}).Correct(context.Background(), []string{"在要总结。"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(corrected) != 1 || corrected[0] != "摘要总结。" {
+		t.Fatalf("corrected = %v", corrected)
+	}
+}

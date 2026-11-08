@@ -47,6 +47,22 @@ func TestReconcileTranscriptKeepsOfflineTextWhenModelsDisagree(t *testing.T) {
 	}
 }
 
+func TestReconcileTranscriptKeepsOfflineTextWhenOnlineDropsLeadingCharacter(t *testing.T) {
+	offline := "摘要总结。"
+	got := reconcileTranscript(offline, "要总结")
+	if got != offline {
+		t.Fatalf("text = %q, want offline text", got)
+	}
+}
+
+func TestReconcileTranscriptKeepsOfflineTextWhenAgreedStreamingsDropLeadingCharacters(t *testing.T) {
+	offline := "摘要总结。"
+	got := reconcileTranscript(offline, "总结", "总结")
+	if got != offline {
+		t.Fatalf("text = %q, want offline text", got)
+	}
+}
+
 func TestReconcileTranscriptKeepsInternalPunctuation(t *testing.T) {
 	offline := "这句话，有内部标点。"
 	got := reconcileTranscript(offline, "这句活有内部标点")

@@ -25,6 +25,15 @@ const (
 // the unavailability cooldown, which exists for hanging or unreachable servers.
 var ErrInvalidGrouping = errors.New("LM Studio 段落划分无效")
 
+// ErrInvalidCorrection marks a malformed correction reply; like ErrInvalidGrouping
+// it must not trigger the unavailability cooldown.
+var ErrInvalidCorrection = errors.New("LM Studio 语义修正无效")
+
+var (
+	errNoChoices = errors.New("LM Studio returned no choices")
+	errTruncated = errors.New("LM Studio response truncated (finish_reason=length)")
+)
+
 const (
 	maxResponseBytes = 1 << 20
 	requestTimeout   = 90 * time.Second
@@ -121,48 +130,81 @@ func (c *Client) Group(ctx context.Context, texts []string) ([]Group, error) {
 	if len(texts) == 0 {
 		return nil, fmt.Errorf("没有可切分的语句")
 	}
-	request := c.chatRequest(texts)
-	body, err := json.Marshal(request)
-	if err != nil {
-		return nil, fmt.Errorf("encode LM Studio request: %w", err)
-	}
-
-	raw, status, err := c.post(ctx, body)
-	if status == http.StatusBadRequest && bytes.Contains(raw, []byte("response_format")) {
-		request.ResponseFormat = nil
-		body, err = json.Marshal(request)
-		if err != nil {
-			return nil, fmt.Errorf("encode LM Studio request: %w", err)
-		}
-		raw, status, err = c.post(ctx, body)
+	content, err := c.complete(ctx, c.chatRequest(texts))
+	if errors.Is(err, errNoChoices) || errors.Is(err, errTruncated) {
+		return nil, invalidGrouping(err)
 	}
 	if err != nil {
 		return nil, err
 	}
-	if status != http.StatusOK {
-		return nil, fmt.Errorf("LM Studio returned %d", status)
-	}
-
-	var payload chatResponse
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, fmt.Errorf("decode LM Studio response: %w", err)
-	}
-	if len(payload.Choices) == 0 {
-		return nil, invalidGrouping(errors.New("LM Studio returned no choices"))
-	}
-	choice := payload.Choices[0]
-	if choice.FinishReason == "length" {
-		return nil, invalidGrouping(errors.New("LM Studio response truncated (finish_reason=length)"))
-	}
-	groups, err := parseGroups(choice.Message.Content, len(texts))
+	groups, err := parseGroups(content, len(texts))
 	if err != nil {
 		return nil, invalidGrouping(err)
 	}
 	return groups, nil
 }
 
+// Correct asks the model to fix obvious ASR mistakes in each text and returns
+// one corrected text per input, in order.
+func (c *Client) Correct(ctx context.Context, texts []string) ([]string, error) {
+	if len(texts) == 0 {
+		return nil, fmt.Errorf("没有可校对的语句")
+	}
+	content, err := c.complete(ctx, c.correctRequest(texts))
+	if errors.Is(err, errNoChoices) || errors.Is(err, errTruncated) {
+		return nil, invalidCorrection(err)
+	}
+	if err != nil {
+		return nil, err
+	}
+	corrected, err := parseCorrections(content, len(texts))
+	if err != nil {
+		return nil, invalidCorrection(err)
+	}
+	return corrected, nil
+}
+
 func invalidGrouping(err error) error {
 	return fmt.Errorf("%w: %v", ErrInvalidGrouping, err)
+}
+
+func invalidCorrection(err error) error {
+	return fmt.Errorf("%w: %v", ErrInvalidCorrection, err)
+}
+
+// complete posts a chat request and returns the first choice content. It falls
+// back to a schema-less retry when the server rejects response_format.
+func (c *Client) complete(ctx context.Context, request chatRequest) (string, error) {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return "", fmt.Errorf("encode LM Studio request: %w", err)
+	}
+	raw, status, err := c.post(ctx, body)
+	if status == http.StatusBadRequest && bytes.Contains(raw, []byte("response_format")) {
+		request.ResponseFormat = nil
+		body, err = json.Marshal(request)
+		if err != nil {
+			return "", fmt.Errorf("encode LM Studio request: %w", err)
+		}
+		raw, status, err = c.post(ctx, body)
+	}
+	if err != nil {
+		return "", err
+	}
+	if status != http.StatusOK {
+		return "", fmt.Errorf("LM Studio returned %d", status)
+	}
+	var payload chatResponse
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", fmt.Errorf("decode LM Studio response: %w", err)
+	}
+	if len(payload.Choices) == 0 {
+		return "", errNoChoices
+	}
+	if payload.Choices[0].FinishReason == "length" {
+		return "", errTruncated
+	}
+	return payload.Choices[0].Message.Content, nil
 }
 
 func (c *Client) post(ctx context.Context, body []byte) ([]byte, int, error) {
@@ -269,17 +311,85 @@ func BuildPrompt(texts []string) string {
 	return b.String()
 }
 
-var fencePattern = regexp.MustCompile("(?s)^\\s*```(?:json)?\\s*(.*?)\\s*```\\s*$")
+const correctionSystemPrompt = "你是中文语音转写（ASR）的校对助手。输入是语音识别结果，常含同音字、近音字错误。" +
+	"修正每句中明显的识别错误，保持原意、用词和标点风格，不润色、不改写、不增删句子。" +
+	"输出与输入等长的 JSON 数组，顺序一致。"
 
-func parseGroups(raw string, n int) ([]Group, error) {
-	text := strings.TrimSpace(raw)
+func (c *Client) correctRequest(texts []string) chatRequest {
+	return chatRequest{
+		Model:       c.model,
+		Messages:    []chatMessage{{Role: "system", Content: correctionSystemPrompt}, {Role: "user", Content: BuildCorrectionPrompt(texts)}},
+		Temperature: 0,
+		// Thinking stays enabled: without reasoning the model is too conservative
+		// to fix anything, and the budget must cover reasoning plus full texts.
+		MaxTokens: 8192,
+		Stream:    false,
+		ResponseFormat: &responseFormat{
+			Type: "json_schema",
+			JSONSchema: jsonSchema{
+				Name:   "corrections",
+				Strict: true,
+				Schema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"texts": map[string]any{
+							"type":     "array",
+							"items":    map[string]any{"type": "string"},
+							"minItems": len(texts),
+							"maxItems": len(texts),
+						},
+					},
+					"required":             []string{"texts"},
+					"additionalProperties": false,
+				},
+			},
+		},
+	}
+}
+
+// BuildCorrectionPrompt feeds the texts as a JSON array; a numbered list makes
+// the model echo the numbering back into the corrected text.
+func BuildCorrectionPrompt(texts []string) string {
+	raw, err := json.Marshal(texts)
+	if err != nil {
+		return "[]"
+	}
+	return string(raw)
+}
+
+func parseCorrections(raw string, n int) ([]string, error) {
+	text := extractJSON(raw)
 	if text == "" {
 		return nil, fmt.Errorf("LM Studio 返回空内容")
 	}
+	var payload struct {
+		Texts []string `json:"texts"`
+	}
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
+		return nil, fmt.Errorf("parse LM Studio JSON: %w", err)
+	}
+	if len(payload.Texts) != n {
+		return nil, fmt.Errorf("校对结果 %d 句与输入 %d 句数量不一致", len(payload.Texts), n)
+	}
+	return payload.Texts, nil
+}
+
+var fencePattern = regexp.MustCompile("(?s)^\\s*```(?:json)?\\s*(.*?)\\s*```\\s*$")
+
+func extractJSON(raw string) string {
+	text := strings.TrimSpace(raw)
 	if match := fencePattern.FindStringSubmatch(text); match != nil {
 		text = strings.TrimSpace(match[1])
 	} else if start, end := strings.Index(text, "{"), strings.LastIndex(text, "}"); start >= 0 && end > start {
 		text = text[start : end+1]
+	}
+	return text
+}
+
+func parseGroups(raw string, n int) ([]Group, error) {
+	text := extractJSON(raw)
+	if text == "" {
+		return nil, fmt.Errorf("LM Studio 返回空内容")
 	}
 	var payload struct {
 		Paragraphs []struct {

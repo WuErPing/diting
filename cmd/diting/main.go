@@ -39,6 +39,7 @@ type config struct {
 	speakerThreshold float64
 	llmURL           string
 	llmModel         string
+	llmCorrect       bool
 	merge            bool
 	reparagraph      bool
 	evalSpeakers     bool
@@ -58,6 +59,7 @@ func main() {
 	flag.Float64Var(&cfg.speakerThreshold, "speaker-threshold", 0.45, "cosine threshold for speaker matching")
 	flag.StringVar(&cfg.llmURL, "llm-url", paragraph.DefaultBaseURL, "LM Studio OpenAI-compatible base URL (loopback only)")
 	flag.StringVar(&cfg.llmModel, "llm-model", paragraph.DefaultModel, "LM Studio model used to split paragraphs")
+	flag.BoolVar(&cfg.llmCorrect, "llm-correct", true, "use the LM Studio model to semantically correct paragraph text")
 	flag.BoolVar(&cfg.merge, "merge", true, "merge consecutive same-speaker segments into paragraphs")
 	flag.BoolVar(&cfg.reparagraph, "reparagraph", false, "rebuild paragraphs from existing transcripts and exit")
 	flag.BoolVar(&cfg.evalSpeakers, "eval-speakers", false, "evaluate speaker model against test set and exit")
@@ -120,10 +122,11 @@ func run(cfg config) error {
 		}
 		client = paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, Model: cfg.llmModel})
 		worker = paragraph.NewWorker(paragraph.WorkerOptions{
-			Store:    paragraphStore,
-			Segments: segmentStore,
-			Grouper:  client,
-			Model:    cfg.llmModel,
+			Store:     paragraphStore,
+			Segments:  segmentStore,
+			Grouper:   client,
+			Corrector: paragraphCorrector(cfg, client),
+			Model:     cfg.llmModel,
 		})
 		defer worker.Close()
 	}
@@ -323,7 +326,7 @@ func retranscribe(cfg config) error {
 		return err
 	}
 	client := paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, Model: cfg.llmModel})
-	rebuildStats, err := paragraph.Rebuild(context.Background(), paragraphStore, segments, client,
+	rebuildStats, err := paragraph.Rebuild(context.Background(), paragraphStore, segments, client, paragraphCorrector(cfg, client),
 		cfg.llmModel, paragraph.RunOptions{}, nil, recognizer.CanonicalSpeaker, progressPrinter("段落重建"))
 	if err != nil {
 		return err
@@ -374,13 +377,20 @@ func reparagraph(cfg config) error {
 	}
 
 	client := paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, Model: cfg.llmModel})
-	stats, err := paragraph.Rebuild(context.Background(), paragraphStore, segments, client,
+	stats, err := paragraph.Rebuild(context.Background(), paragraphStore, segments, client, paragraphCorrector(cfg, client),
 		cfg.llmModel, paragraph.RunOptions{}, nil, resolve, progressPrinter("段落重建"))
 	if err != nil {
 		return err
 	}
 	printRebuildStats(stats)
 	return nil
+}
+
+func paragraphCorrector(cfg config, client *paragraph.Client) paragraph.Corrector {
+	if !cfg.llmCorrect {
+		return nil
+	}
+	return client
 }
 
 func progressPrinter(label string) func(done, total int) {

@@ -537,7 +537,7 @@ func TestRebuild(t *testing.T) {
 
 	var progress [][2]int
 	stats, err := Rebuild(context.Background(), paragraphStore,
-		[]store.Segment{one, two, three, four, five}, grouper, "m", RunOptions{},
+		[]store.Segment{one, two, three, four, five}, grouper, nil, "m", RunOptions{},
 		newFakeClock(base3.Add(time.Hour)), nil, func(done, total int) {
 			progress = append(progress, [2]int{done, total})
 		})
@@ -576,7 +576,7 @@ func TestRebuildStopsCallingAfterTransportFailure(t *testing.T) {
 	}}
 	paragraphStore := openTestStore(t)
 	stats, err := Rebuild(context.Background(), paragraphStore, []store.Segment{one, two, three, four},
-		grouper, "m", RunOptions{}, newFakeClock(testBase), nil, nil)
+		grouper, nil, "m", RunOptions{}, newFakeClock(testBase), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -604,7 +604,7 @@ func TestRebuildRetriesAfterInvalidGrouping(t *testing.T) {
 	}}
 	paragraphStore := openTestStore(t)
 	stats, err := Rebuild(context.Background(), paragraphStore, []store.Segment{one, two, three, four},
-		grouper, "m", RunOptions{}, newFakeClock(base2), nil, nil)
+		grouper, nil, "m", RunOptions{}, newFakeClock(base2), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -622,7 +622,7 @@ func TestRebuildWithoutGrouperFallsBack(t *testing.T) {
 	two := testSegment("a2", "说话人1", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
 	paragraphStore := openTestStore(t)
 
-	stats, err := Rebuild(context.Background(), paragraphStore, []store.Segment{one, two}, nil, "", RunOptions{}, newFakeClock(testBase), nil, nil)
+	stats, err := Rebuild(context.Background(), paragraphStore, []store.Segment{one, two}, nil, nil, "", RunOptions{}, newFakeClock(testBase), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -688,4 +688,125 @@ func TestWorkerReloadDropsDeletedSegments(t *testing.T) {
 		}
 		return all[0].Source == SourceSingle
 	})
+}
+
+type fakeCorrector struct {
+	mu    sync.Mutex
+	calls [][]string
+	fn    func(ctx context.Context, texts []string) ([]string, error)
+}
+
+func (c *fakeCorrector) Correct(ctx context.Context, texts []string) ([]string, error) {
+	c.mu.Lock()
+	c.calls = append(c.calls, append([]string(nil), texts...))
+	fn := c.fn
+	c.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, texts)
+	}
+	return append([]string(nil), texts...), nil
+}
+
+func (c *fakeCorrector) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.calls)
+}
+
+func TestWorkerCorrectsParagraphText(t *testing.T) {
+	clock := newFakeClock(testBase)
+	paragraphStore := openTestStore(t)
+	corrector := &fakeCorrector{fn: func(_ context.Context, texts []string) ([]string, error) {
+		return []string{"摘要总结。"}, nil
+	}}
+	worker := NewWorker(WorkerOptions{
+		Store:     paragraphStore,
+		Corrector: corrector,
+		Model:     "test-model",
+		Clock:     clock,
+		Logf:      quietLogf,
+	})
+	worker.Start(context.Background())
+	defer worker.Close()
+
+	worker.Notify(testSegment("a", "说话人1", "在要总结。", testBase, testBase.Add(time.Second)))
+	waitFor(t, "open paragraph", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 1 && all[0].Text == "在要总结。"
+	})
+	if corrector.count() != 0 {
+		t.Fatalf("open run must not trigger correction, calls = %d", corrector.count())
+	}
+
+	// A speaker change closes the run; only then is correction applied.
+	worker.Notify(testSegment("b", "说话人2", "另一句。", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
+	waitFor(t, "corrected paragraph", func() bool {
+		for _, paragraph := range paragraphStore.All() {
+			if paragraph.ID == "a" && paragraph.Text == "摘要总结。" {
+				return true
+			}
+		}
+		return false
+	})
+	for _, paragraph := range paragraphStore.All() {
+		if paragraph.ID == "a" && (paragraph.Source != SourceSingle || paragraph.SegmentIDs[0] != "a") {
+			t.Fatalf("paragraph = %+v", paragraph)
+		}
+	}
+}
+
+func TestWorkerSavesOriginalWhenCorrectionFails(t *testing.T) {
+	clock := newFakeClock(testBase)
+	paragraphStore := openTestStore(t)
+	corrector := &fakeCorrector{fn: func(context.Context, []string) ([]string, error) {
+		return nil, errors.New("connection refused")
+	}}
+	worker := NewWorker(WorkerOptions{
+		Store:     paragraphStore,
+		Corrector: corrector,
+		Model:     "test-model",
+		Clock:     clock,
+		Logf:      quietLogf,
+	})
+	worker.Start(context.Background())
+	defer worker.Close()
+
+	worker.Notify(testSegment("a", "说话人1", "在要总结。", testBase, testBase.Add(time.Second)))
+	waitFor(t, "open paragraph", func() bool { return len(paragraphStore.All()) == 1 })
+	worker.Notify(testSegment("b", "说话人2", "另一句。", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
+	waitFor(t, "uncorrected paragraph after failed correction", func() bool {
+		all := paragraphStore.All()
+		if len(all) != 2 {
+			return false
+		}
+		for _, paragraph := range all {
+			if paragraph.ID == "a" && paragraph.Text == "在要总结。" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func TestRebuildAppliesCorrections(t *testing.T) {
+	one := testSegment("a1", "说话人1", "在要", testBase, testBase.Add(time.Second))
+	two := testSegment("a2", "说话人1", "总结。", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
+	grouper := &fakeGrouper{}
+	corrector := &fakeCorrector{fn: func(_ context.Context, texts []string) ([]string, error) {
+		return []string{"摘要总结。"}, nil
+	}}
+	paragraphStore := openTestStore(t)
+
+	stats, err := Rebuild(context.Background(), paragraphStore, []store.Segment{one, two}, grouper, corrector,
+		"m", RunOptions{}, newFakeClock(testBase), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats != (RebuildStats{Runs: 1, LLM: 1, Single: 0, Fallback: 0, Paragraphs: 1}) {
+		t.Fatalf("stats = %+v", stats)
+	}
+	all := paragraphStore.All()
+	if len(all) != 1 || all[0].Text != "摘要总结。" {
+		t.Fatalf("paragraphs = %v", all)
+	}
 }

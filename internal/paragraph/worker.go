@@ -27,10 +27,15 @@ type Grouper interface {
 	Group(ctx context.Context, texts []string) ([]Group, error)
 }
 
+type Corrector interface {
+	Correct(ctx context.Context, texts []string) ([]string, error)
+}
+
 type WorkerOptions struct {
 	Store       *Store
 	Segments    SegmentSource
 	Grouper     Grouper
+	Corrector   Corrector
 	Model       string
 	MaxSegments int
 	MaxChars    int
@@ -69,6 +74,9 @@ type Worker struct {
 
 type job struct {
 	run []store.Segment
+	// final marks a closed run; correction is expensive (thinking-enabled LLM
+	// call), so it only runs once per run instead of on every live re-group.
+	final bool
 }
 
 func NewWorker(opts WorkerOptions) *Worker {
@@ -271,7 +279,7 @@ func (w *Worker) backfill(ctx context.Context) {
 		if coveredBySource(run, coverage, false) {
 			continue
 		}
-		w.low = append(w.low, job{run: run})
+		w.low = append(w.low, job{run: run, final: true})
 		w.backfillN++
 		if len(run) > 1 {
 			w.backfillLL++
@@ -326,10 +334,12 @@ func (w *Worker) closeOpen() {
 	w.open = nil
 	w.openChars = 0
 	w.openDirty = false
-	if !dirty && coveredBySource(run, w.opts.Store.Coverage(), false) {
+	// With a corrector, every closed run needs one final pass even when its
+	// paragraphs are already saved, because open-run processing skips correction.
+	if !dirty && w.opts.Corrector == nil && coveredBySource(run, w.opts.Store.Coverage(), false) {
 		return
 	}
-	w.high = append(w.high, job{run: run})
+	w.high = append(w.high, job{run: run, final: true})
 }
 
 func (w *Worker) process(ctx context.Context, job job) {
@@ -378,6 +388,9 @@ func (w *Worker) process(ctx context.Context, job job) {
 	}
 
 	paragraphs := ComposeParagraphs(run, groups, source, w.opts.Model, w.clock.Now(), w.speakerResolve)
+	if w.opts.Corrector != nil && job.final && !w.cooling() {
+		w.correctParagraphs(ctx, paragraphs)
+	}
 	if err := w.opts.Store.SaveMany(paragraphs); err != nil {
 		w.opts.Logf("保存段落失败: %v", err)
 		return
@@ -392,6 +405,48 @@ func (w *Worker) process(ctx context.Context, job job) {
 
 func (w *Worker) cooling() bool {
 	return w.clock.Now().Before(w.failUntil)
+}
+
+// correctParagraphs applies best-effort semantic corrections in place; on any
+// failure the original texts are kept and the paragraphs still get saved.
+func (w *Worker) correctParagraphs(ctx context.Context, paragraphs []Paragraph) {
+	texts := make([]string, len(paragraphs))
+	for i, paragraph := range paragraphs {
+		texts[i] = paragraph.Text
+	}
+	updated, err := correctTexts(ctx, w.opts.Corrector, texts)
+	if ctx.Err() != nil {
+		return
+	}
+	if err != nil {
+		if !errors.Is(err, ErrInvalidCorrection) {
+			w.recordFailure()
+		}
+		w.opts.Logf("段落语义修正失败，保留原文: paragraphs=%d err=%v", len(paragraphs), err)
+		return
+	}
+	w.resetFailure()
+	applied := 0
+	for i := range paragraphs {
+		if paragraphs[i].Text != updated[i] {
+			paragraphs[i].Text = updated[i]
+			applied++
+		}
+	}
+	if applied > 0 {
+		w.opts.Logf("段落语义修正: %d/%d 段已更新", applied, len(paragraphs))
+	}
+}
+
+func correctTexts(ctx context.Context, corrector Corrector, texts []string) ([]string, error) {
+	callCtx, cancel := context.WithTimeout(ctx, requestDeadline)
+	defer cancel()
+	corrected, err := corrector.Correct(callCtx, texts)
+	if err != nil {
+		return nil, err
+	}
+	merged, _ := ApplyCorrections(texts, corrected)
+	return merged, nil
 }
 
 func (w *Worker) recordFailure() {
@@ -463,7 +518,7 @@ type RebuildStats struct {
 
 // Rebuild regenerates every paragraph from the given segments and atomically
 // replaces the paragraph file. Failures fall back to whole-run concatenation.
-func Rebuild(ctx context.Context, paragraphStore *Store, segments []store.Segment, grouper Grouper,
+func Rebuild(ctx context.Context, paragraphStore *Store, segments []store.Segment, grouper Grouper, corrector Corrector,
 	model string, opts RunOptions, clock Clock, resolve func(string) string, progress func(done, total int)) (RebuildStats, error) {
 	if clock == nil {
 		clock = realClock{}
@@ -506,7 +561,27 @@ func Rebuild(ctx context.Context, paragraphStore *Store, segments []store.Segmen
 				}
 			}
 		}
-		paragraphs = append(paragraphs, ComposeParagraphs(run, groups, source, model, clock.Now(), resolve)...)
+		composed := ComposeParagraphs(run, groups, source, model, clock.Now(), resolve)
+		if corrector != nil && !cooling && len(composed) > 0 {
+			texts := make([]string, len(composed))
+			for j := range composed {
+				texts[j] = composed[j].Text
+			}
+			updated, err := correctTexts(ctx, corrector, texts)
+			if err != nil {
+				if ctx.Err() != nil {
+					return stats, ctx.Err()
+				}
+				if !errors.Is(err, ErrInvalidCorrection) {
+					cooling = true
+				}
+			} else {
+				for j := range composed {
+					composed[j].Text = updated[j]
+				}
+			}
+		}
+		paragraphs = append(paragraphs, composed...)
 		switch source {
 		case SourceLLM:
 			stats.LLM++
