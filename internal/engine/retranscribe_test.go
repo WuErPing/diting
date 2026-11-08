@@ -186,6 +186,32 @@ func TestRetranscribeDecodesCompressedAudio(t *testing.T) {
 	}
 }
 
+func TestLoadAudioSamplesUsesCanonicalDecoder(t *testing.T) {
+	originalRead := readWave
+	originalConvert := convertToWAV
+	defer func() {
+		readWave = originalRead
+		convertToWAV = originalConvert
+	}()
+	convertToWAV = func(path string) (string, func(), error) {
+		return "/tmp/canonical.wav", func() {}, nil
+	}
+	readWave = func(path string) *sherpa.Wave {
+		if path != "/tmp/canonical.wav" {
+			t.Fatalf("readWave path = %q", path)
+		}
+		return &sherpa.Wave{Samples: []float32{0.1, 0.2}, SampleRate: SampleRate}
+	}
+
+	samples, err := LoadAudioSamples("recording.m4a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(samples) != 2 {
+		t.Fatalf("samples = %d, want 2", len(samples))
+	}
+}
+
 func TestCanonicalizeWAVRewritesExtensibleHeader(t *testing.T) {
 	const (
 		channels = 1

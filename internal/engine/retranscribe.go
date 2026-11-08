@@ -43,6 +43,26 @@ type Stats struct {
 	EmptyText    int
 }
 
+func LoadAudioSamples(path string) ([]float32, error) {
+	wavePath := path
+	var cleanup func()
+	var err error
+	if !strings.EqualFold(filepath.Ext(path), ".wav") {
+		wavePath, cleanup, err = convertToWAV(path)
+		if err != nil {
+			return nil, err
+		}
+	}
+	wave := readWave(wavePath)
+	if cleanup != nil {
+		cleanup()
+	}
+	if wave == nil || wave.SampleRate != SampleRate {
+		return nil, fmt.Errorf("read %s as %d Hz PCM", path, SampleRate)
+	}
+	return wave.Samples, nil
+}
+
 func RetranscribeAll(history History, processor Processor) (Stats, error) {
 	segments, err := history.All()
 	if err != nil {
@@ -58,35 +78,23 @@ func RetranscribeAll(history History, processor Processor) (Stats, error) {
 			stats.MissingAudio++
 			continue
 		}
-		wavePath := path
-		var cleanup func()
-		if !strings.EqualFold(filepath.Ext(path), ".wav") {
-			wavePath, cleanup, err = convertToWAV(path)
-			if err != nil {
-				decodeWarn.Do(func() {
-					log.Printf("部分录音无法解码为 WAV，已跳过: %v", err)
-				})
-				stats.MissingAudio++
-				continue
-			}
-		}
-		wave := readWave(wavePath)
-		if cleanup != nil {
-			cleanup()
-		}
-		if wave == nil || wave.SampleRate != SampleRate {
+		samples, err := LoadAudioSamples(path)
+		if err != nil {
+			decodeWarn.Do(func() {
+				log.Printf("部分录音无法解码为 WAV，已跳过: %v", err)
+			})
 			stats.MissingAudio++
 			continue
 		}
 
-		text := strings.TrimSpace(processor.RefineWAV(wave.Samples))
+		text := strings.TrimSpace(processor.RefineWAV(samples))
 		if text == "" {
 			stats.EmptyText++
 		} else {
 			segment.Text = text
 			stats.Updated++
 		}
-		segment.Speaker = processor.IdentifySamples(wave.Samples, time.Duration(segment.DurationMS)*time.Millisecond)
+		segment.Speaker = processor.IdentifySamples(samples, time.Duration(segment.DurationMS)*time.Millisecond)
 
 		if (i+1)%50 == 0 {
 			log.Printf("重新转写进度: %d/%d", i+1, len(segments))

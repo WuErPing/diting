@@ -16,12 +16,14 @@ import (
 )
 
 const (
-	registryVersion   = 1
-	minEnrollDuration = 3 * time.Second
-	minUpdateDuration = 1500 * time.Millisecond
-	maxBlendWeight    = 20
-	enrollMargin      = float32(0.08)
-	maxAliasRunes     = 32
+	registryVersion     = 1
+	minEnrollDuration   = 3 * time.Second
+	minUpdateDuration   = 2 * time.Second
+	maxBlendWeight      = 20
+	enrollMargin        = float32(0.08)
+	updateMargin        = float32(0.03)
+	minEmbeddingQuality = float32(0.6)
+	maxAliasRunes       = 32
 )
 
 var (
@@ -110,6 +112,10 @@ func Open(path string, dim int, threshold float32) (*Registry, error) {
 // never update a centroid. A new speaker is enrolled only when the best score
 // is clearly below the threshold, which avoids fragmenting one voice.
 func (r *Registry) Identify(embedding []float32, duration time.Duration) string {
+	return r.IdentifyWithQuality(embedding, duration, 1)
+}
+
+func (r *Registry) IdentifyWithQuality(embedding []float32, duration time.Duration, quality float32) string {
 	normalized := Normalize(embedding)
 	if normalized == nil || len(normalized) != r.dim {
 		return ""
@@ -120,9 +126,16 @@ func (r *Registry) Identify(embedding []float32, duration time.Duration) string 
 
 	if len(r.profiles) > 0 {
 		best, score := closest(r.profiles, normalized)
+		secondScore := float32(-1)
+		for i, candidate := range r.profiles {
+			if i != best {
+				secondScore = max(secondScore, Cosine(normalized, candidate.Centroid))
+			}
+		}
 		profile := &r.profiles[best]
 		if score >= r.threshold {
-			if duration >= minUpdateDuration {
+			if duration >= minUpdateDuration && quality >= minEmbeddingQuality &&
+				score >= r.threshold+updateMargin && score-secondScore >= updateMargin {
 				profile.Centroid = Normalize(blend(profile.Centroid, profile.Count, normalized))
 				profile.Count++
 				profile.UpdatedAt = time.Now().UTC()
@@ -134,7 +147,7 @@ func (r *Registry) Identify(embedding []float32, duration time.Duration) string 
 		}
 	}
 
-	if duration < minEnrollDuration {
+	if duration < minEnrollDuration || quality < minEmbeddingQuality {
 		return ""
 	}
 

@@ -208,21 +208,14 @@ func (e *Engine) IdentifySamples(samples []float32, duration time.Duration) stri
 	if e.speakerEx == nil || e.speakers == nil || len(samples) < SampleRate/2 {
 		return ""
 	}
-	stream := e.speakerEx.CreateStream()
-	defer sherpa.DeleteOnlineStream(stream)
-	stream.AcceptWaveform(SampleRate, samples)
-	stream.InputFinished()
-	if !e.speakerEx.IsReady(stream) {
-		return ""
-	}
-	embedding := e.speakerEx.Compute(stream)
+	embedding, quality := ExtractSpeakerEmbedding(e.speakerEx, samples)
 	if len(embedding) == 0 {
 		e.speakerErrorOne.Do(func() {
 			log.Printf("提取声纹失败，后续片段将不带说话人标签")
 		})
 		return ""
 	}
-	return e.speakers.Identify(embedding, duration)
+	return e.speakers.IdentifyWithQuality(embedding, duration, quality)
 }
 
 func (e *Engine) refine(samples []float32) string {

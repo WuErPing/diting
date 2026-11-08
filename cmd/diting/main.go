@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,7 @@ import (
 	"diting/internal/lexicon"
 	"diting/internal/paragraph"
 	"diting/internal/server"
+	"diting/internal/speaker"
 	"diting/internal/store"
 	"diting/web"
 )
@@ -39,6 +41,9 @@ type config struct {
 	llmModel         string
 	merge            bool
 	reparagraph      bool
+	evalSpeakers     bool
+	exportTestset    bool
+	testsetPath      string
 }
 
 func main() {
@@ -55,6 +60,9 @@ func main() {
 	flag.StringVar(&cfg.llmModel, "llm-model", paragraph.DefaultModel, "LM Studio model used to split paragraphs")
 	flag.BoolVar(&cfg.merge, "merge", true, "merge consecutive same-speaker segments into paragraphs")
 	flag.BoolVar(&cfg.reparagraph, "reparagraph", false, "rebuild paragraphs from existing transcripts and exit")
+	flag.BoolVar(&cfg.evalSpeakers, "eval-speakers", false, "evaluate speaker model against test set and exit")
+	flag.BoolVar(&cfg.exportTestset, "export-testset", false, "export annotated segments as speaker test set and exit")
+	flag.StringVar(&cfg.testsetPath, "testset", "", "test set JSONL path (default: <data>/testset.jsonl)")
 	flag.Parse()
 
 	if cfg.speakerModel == "" {
@@ -75,6 +83,12 @@ func run(cfg config) error {
 	}
 	if cfg.reparagraph {
 		return reparagraph(cfg)
+	}
+	if cfg.evalSpeakers {
+		return evalSpeakers(cfg)
+	}
+	if cfg.exportTestset {
+		return exportTestset(cfg)
 	}
 	if err := validateListenAddress(cfg.listen); err != nil {
 		return err
@@ -403,4 +417,166 @@ func loadSpeakerMerges(path string) map[string]string {
 		}
 	}
 	return merges
+}
+
+func evalSpeakers(cfg config) error {
+	testsetPath := cfg.testsetPath
+	if testsetPath == "" {
+		testsetPath = filepath.Join(cfg.data, "testset.jsonl")
+	}
+	entries, err := speaker.LoadTestSet(testsetPath)
+	if err != nil {
+		return err
+	}
+
+	paths := modelPaths(cfg)
+	extractor, err := engine.NewSpeakerExtractor(paths)
+	if err != nil {
+		return err
+	}
+	defer sherpa.DeleteSpeakerEmbeddingExtractor(extractor)
+
+	fmt.Printf("模型: %s (维度 %d)\n", filepath.Base(paths.Speaker), extractor.Dim())
+	fmt.Printf("测试集: %s (%d 条)\n\n", testsetPath, len(entries))
+
+	embeddings := make([][]float32, 0, len(entries))
+	labels := make([]string, 0, len(entries))
+	skipped := 0
+
+	for i, entry := range entries {
+		audioPath := entry.Audio
+		if !filepath.IsAbs(audioPath) {
+			audioPath = filepath.Join(cfg.data, filepath.FromSlash(audioPath))
+		}
+		samples, err := loadAudioSamples(audioPath, entry.Offset, entry.Limit)
+		if err != nil {
+			skipped++
+			if skipped <= 3 {
+				log.Printf("跳过 %s: %v", entry.Audio, err)
+			}
+			continue
+		}
+		embedding := extractEmbedding(extractor, samples)
+		if embedding == nil {
+			skipped++
+			continue
+		}
+		embeddings = append(embeddings, embedding)
+		labels = append(labels, entry.Speaker)
+		if (i+1)%50 == 0 {
+			log.Printf("提取进度: %d/%d", i+1, len(entries))
+		}
+	}
+
+	if skipped > 0 {
+		fmt.Printf("跳过 %d 条（音频缺失或无法提取）\n\n", skipped)
+	}
+	if len(embeddings) < 2 {
+		return fmt.Errorf("有效数据不足（%d 条），无法评估", len(embeddings))
+	}
+
+	threshold := float32(cfg.speakerThreshold)
+	result := speaker.Evaluate(embeddings, labels, threshold)
+	fmt.Println(speaker.FormatResult(result))
+	suggested := speaker.SuggestThreshold(result)
+	fmt.Printf("\n建议阈值: %.3f\n", suggested)
+	return nil
+}
+
+func speakerRegistryDimension(path string, fallback int) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fallback
+	}
+	var metadata struct {
+		Dim int `json:"dim"`
+	}
+	if err := json.Unmarshal(data, &metadata); err != nil || metadata.Dim <= 0 {
+		return fallback
+	}
+	return metadata.Dim
+}
+
+func exportTestset(cfg config) error {
+	segmentStore, err := store.Open(cfg.data)
+	if err != nil {
+		return err
+	}
+	defer segmentStore.Close()
+
+	segments, err := segmentStore.All()
+	if err != nil {
+		return err
+	}
+
+	registryPath := filepath.Join(cfg.data, "speakers.json")
+	dimension := speakerRegistryDimension(registryPath, 192)
+	registry, err := speaker.Open(registryPath, dimension, float32(cfg.speakerThreshold))
+	if err != nil {
+		registry = nil
+	}
+
+	outPath := cfg.testsetPath
+	if outPath == "" {
+		outPath = filepath.Join(cfg.data, "testset.jsonl")
+	}
+	file, err := os.Create(outPath)
+	if err != nil {
+		return fmt.Errorf("create test set file: %w", err)
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	encoder := json.NewEncoder(writer)
+	exported := 0
+	for _, segment := range segments {
+		if segment.AudioPath == "" || segment.Speaker == "" {
+			continue
+		}
+		label := segment.Speaker
+		if registry != nil {
+			label = registry.DisplayName(segment.Speaker)
+		}
+		entry := speaker.TestEntry{
+			Audio:   segment.AudioPath,
+			Speaker: label,
+		}
+		if err := encoder.Encode(entry); err != nil {
+			return err
+		}
+		exported++
+	}
+	if err := writer.Flush(); err != nil {
+		return err
+	}
+	fmt.Printf("已导出 %d 条到 %s\n", exported, outPath)
+	fmt.Println("请手动检查并修正说话人标注，确保 ground truth 准确。")
+	return nil
+}
+
+func loadAudioSamples(path string, offset, limit float64) ([]float32, error) {
+	samples, err := engine.LoadAudioSamples(path)
+	if err != nil {
+		return nil, err
+	}
+	if offset > 0 || limit > 0 {
+		start := int(offset * float64(engine.SampleRate))
+		if start > len(samples) {
+			return nil, fmt.Errorf("offset 超出音频长度")
+		}
+		end := len(samples)
+		if limit > 0 {
+			end = min(start+int(limit*float64(engine.SampleRate)), len(samples))
+		}
+		samples = samples[start:end]
+	}
+	if len(samples) < engine.SampleRate/2 {
+		return nil, fmt.Errorf("音频太短")
+	}
+	return samples, nil
+}
+
+func extractEmbedding(extractor *sherpa.SpeakerEmbeddingExtractor, samples []float32) []float32 {
+	embedding, _ := engine.ExtractSpeakerEmbedding(extractor, samples)
+	return embedding
 }

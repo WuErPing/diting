@@ -82,7 +82,8 @@ func NewOnlineRecognizer(paths ModelPaths) (*sherpa.OnlineRecognizer, error) {
 	config.ModelConfig.Tokens = filepath.Join(paths.ASRDir, "tokens.txt")
 	config.ModelConfig.NumThreads = 2
 	config.ModelConfig.Provider = "cpu"
-	config.DecodingMethod = "greedy_search"
+	config.DecodingMethod = "modified_beam_search"
+	config.MaxActivePaths = 4
 	config.EnableEndpoint = 1
 	config.Rule1MinTrailingSilence = 2.4
 	config.Rule2MinTrailingSilence = 0.8
