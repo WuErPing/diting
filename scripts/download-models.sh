@@ -7,6 +7,7 @@ BASE_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models"
 SPEAKER_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models"
 HF_MIRROR="https://hf-mirror.com/csukuangfj/speaker-embedding-models/resolve/main"
 ASR_DIR="sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30"
+SECONDARY_ASR_DIR="sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23"
 REFINE_DIR="sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
 SPEAKER_MODEL="3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx"
 
@@ -60,7 +61,7 @@ if [[ -n "$EXTRA_SPEAKER" && "$EXTRA_SPEAKER" != "$SPEAKER_MODEL" ]]; then
   download_speaker_model "$EXTRA_SPEAKER"
 fi
 
-for MODEL_DIR in "$ASR_DIR" "$REFINE_DIR"; do
+for MODEL_DIR in "$ASR_DIR" "$SECONDARY_ASR_DIR" "$REFINE_DIR"; do
   if [[ ! -d "$MODEL_DIR" ]]; then
     curl --fail --location --retry 3 --output "$MODEL_DIR.tar.bz2.download" "$BASE_URL/$MODEL_DIR.tar.bz2"
     mv "$MODEL_DIR.tar.bz2.download" "$MODEL_DIR.tar.bz2"

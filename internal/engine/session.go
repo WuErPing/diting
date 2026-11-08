@@ -135,7 +135,8 @@ func (s *captureSession) finishReady(current *utterance) *utterance {
 		samples := make([]float32, 0, lead+len(segment.Samples))
 		samples = append(samples, current.preRoll[:lead]...)
 		samples = append(samples, segment.Samples...)
-		text := s.engine.refine(samples)
+		onlineText := strings.TrimSpace(s.recognizer.GetResult(s.stream).Text)
+		text := s.engine.refineWithAlternatives(samples, onlineText, s.engine.secondaryTranscript(samples))
 		speakerLabel := s.engine.IdentifySamples(samples, sampleDuration(len(samples)))
 		saved, err := s.store.Save(store.Segment{
 			ID:        current.id,

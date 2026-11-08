@@ -56,6 +56,7 @@ type Engine struct {
 	paths      ModelPaths
 	store      *store.Store
 	recognizer *sherpa.OnlineRecognizer
+	secondary  *sherpa.OnlineRecognizer
 	refiner    *sherpa.OfflineRecognizer
 	speakerEx  *sherpa.SpeakerEmbeddingExtractor
 	speakers   *speaker.Registry
@@ -91,6 +92,16 @@ func New(paths ModelPaths, segmentStore *store.Store, opts Options) (*Engine, er
 		events:     make(chan Event, 256),
 		onSegment:  opts.OnSegment,
 		lexicon:    opts.Lexicon,
+	}
+	if paths.SecondaryASRDir != "" {
+		secondaryPaths := paths
+		secondaryPaths.ASRDir = paths.SecondaryASRDir
+		secondary, err := NewOnlineRecognizer(secondaryPaths)
+		if err != nil {
+			log.Printf("辅助流式模型不可用，将使用单模型校正: %v", err)
+		} else {
+			engine.secondary = secondary
+		}
 	}
 	if opts.SpeakerRegistry != "" {
 		extractor, err := NewSpeakerExtractor(paths)
@@ -197,6 +208,9 @@ func (e *Engine) Close() {
 		sherpa.DeleteSpeakerEmbeddingExtractor(e.speakerEx)
 	}
 	sherpa.DeleteOnlineRecognizer(e.recognizer)
+	if e.secondary != nil {
+		sherpa.DeleteOnlineRecognizer(e.secondary)
+	}
 	sherpa.DeleteOfflineRecognizer(e.refiner)
 }
 
@@ -219,11 +233,38 @@ func (e *Engine) IdentifySamples(samples []float32, duration time.Duration) stri
 }
 
 func (e *Engine) refine(samples []float32) string {
+	return e.refineWithAlternatives(samples, e.onlineTranscript(samples), e.secondaryTranscript(samples))
+}
+
+func (e *Engine) refineWithAlternatives(samples []float32, online, secondary string) string {
 	stream := sherpa.NewOfflineStream(e.refiner)
 	defer sherpa.DeleteOfflineStream(stream)
 	stream.AcceptWaveform(SampleRate, samples)
 	e.refiner.Decode(stream)
-	return e.lexicon.Apply(strings.TrimSpace(stream.GetResult().Text))
+	offline := strings.TrimSpace(stream.GetResult().Text)
+	return e.lexicon.Apply(reconcileTranscript(offline, strings.TrimSpace(online), strings.TrimSpace(secondary)))
+}
+
+func (e *Engine) onlineTranscript(samples []float32) string {
+	return decodeOnlineTranscript(e.recognizer, samples)
+}
+
+func (e *Engine) secondaryTranscript(samples []float32) string {
+	if e.secondary == nil {
+		return ""
+	}
+	return decodeOnlineTranscript(e.secondary, samples)
+}
+
+func decodeOnlineTranscript(recognizer *sherpa.OnlineRecognizer, samples []float32) string {
+	stream := sherpa.NewOnlineStream(recognizer)
+	defer sherpa.DeleteOnlineStream(stream)
+	stream.AcceptWaveform(SampleRate, samples)
+	stream.InputFinished()
+	for recognizer.IsReady(stream) {
+		recognizer.Decode(stream)
+	}
+	return strings.TrimSpace(recognizer.GetResult(stream).Text)
 }
 
 func (e *Engine) Speakers() []speaker.View {

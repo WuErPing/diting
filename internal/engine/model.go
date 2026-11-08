@@ -14,18 +14,20 @@ const (
 )
 
 type ModelPaths struct {
-	ASRDir     string
-	OfflineDir string
-	VAD        string
-	Speaker    string
+	ASRDir          string
+	SecondaryASRDir string
+	OfflineDir      string
+	VAD             string
+	Speaker         string
 }
 
 func DefaultModelPaths(root string) ModelPaths {
 	return ModelPaths{
-		ASRDir:     filepath.Join(root, "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30"),
-		OfflineDir: filepath.Join(root, "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"),
-		VAD:        filepath.Join(root, "silero_vad.onnx"),
-		Speaker:    filepath.Join(root, SpeakerModelName),
+		ASRDir:          filepath.Join(root, "sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30"),
+		SecondaryASRDir: filepath.Join(root, "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23"),
+		OfflineDir:      filepath.Join(root, "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"),
+		VAD:             filepath.Join(root, "silero_vad.onnx"),
+		Speaker:         filepath.Join(root, SpeakerModelName),
 	}
 }
 

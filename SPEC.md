@@ -10,7 +10,7 @@
 
 - Go 1.25.6，CGO enabled，macOS arm64。
 - `gen2brain/malgo`：CoreAudio 麦克风采集，16kHz、单声道、S16 PCM。
-- `k2-fsa/sherpa-onnx-go/v2`：Silero VAD、OnlineRecognizer 流式识别与 SenseVoice 完整分段精校。
+- `k2-fsa/sherpa-onnx-go/v2`：Silero VAD、OnlineRecognizer 流式识别与 SenseVoice 完整分段精校；短句在两个独立流式模型结果一致时允许最多两处编辑的保守校正，辅助模型不可用时仅允许一处编辑。
 - Go 标准库 `net/http`、`embed`：本地 API、SSE 和内嵌静态控制台。
 - 原生 HTML/CSS/JavaScript，无前端构建步骤和外部 CDN。
 - 本机 LM Studio OpenAI 兼容接口（可选）：`/v1/chat/completions`，只允许回环地址，用于段落边界判断；不可用时降级为整段拼接。
