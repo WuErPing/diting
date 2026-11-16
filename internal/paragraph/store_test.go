@@ -117,6 +117,25 @@ func TestStoreOpenSkipsBadLines(t *testing.T) {
 	}
 }
 
+func TestStorePreservesDigestWhenTextUnchanged(t *testing.T) {
+	store := openTestStore(t)
+	if err := store.SaveMany([]Paragraph{{ID: "a", Text: "原文", Digest: "手动总结", SegmentIDs: []string{"a"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveMany([]Paragraph{{ID: "a", Text: "原文", SegmentIDs: []string{"a"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.All()[0].Digest; got != "手动总结" {
+		t.Fatalf("digest = %q", got)
+	}
+	if err := store.SaveMany([]Paragraph{{ID: "a", Text: "新原文", SegmentIDs: []string{"a"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.All()[0].Digest; got != "" {
+		t.Fatalf("stale digest = %q", got)
+	}
+}
+
 func TestStoreAtomicRewriteLeavesNoTempFiles(t *testing.T) {
 	root := t.TempDir()
 	store, err := Open(root)

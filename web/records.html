@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>声音记录 · 谛听</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/records.js" defer></script>
+</head>
+<body>
+  <div class="app-shell records-shell">
+    <header class="masthead">
+      <div class="identity">
+        <div class="seal" aria-hidden="true">听</div>
+        <div>
+          <p class="eyebrow">LOCAL SPEECH ARCHIVE</p>
+          <h1>谛听</h1>
+          <p class="tagline">逐句人声，原音可寻。</p>
+        </div>
+      </div>
+      <div class="connection" id="connection" role="status">
+        <span class="connection-dot" aria-hidden="true"></span>
+        <span id="connectionText">正在连接</span>
+      </div>
+    </header>
+
+    <main class="records-main" aria-labelledby="recordsTitle">
+      <div class="records-header">
+        <div>
+          <p class="eyebrow">VOICE ARCHIVE</p>
+          <h2 id="recordsTitle">声音记录</h2>
+          <p class="records-intro">逐句转写与原始录音，最新在前。</p>
+        </div>
+        <div class="records-actions">
+          <a class="text-button" href="/">返回首页</a>
+          <button class="text-button" id="refreshButton" type="button">刷新记录</button>
+        </div>
+      </div>
+      <p class="error-message" id="errorMessage" role="alert" hidden></p>
+      <div class="empty-state" id="emptyState">
+        <p>还没有人声记录</p>
+        <span>回到首页开始聆听，完成的语句会出现在这里。</span>
+      </div>
+      <ol class="timeline" id="segmentList"></ol>
+      <button class="load-more" id="loadMoreButton" type="button" hidden>查看更早记录</button>
+    </main>
+
+    <footer>
+      <span>逐句记录 · 原始录音 · 本地持久化</span>
+      <span>录音与文本保存在运行目录的 data 中</span>
+    </footer>
+  </div>
+
+  <template id="segmentTemplate">
+    <li class="segment-item">
+      <div class="timeline-node" aria-hidden="true"></div>
+      <div class="segment-meta">
+        <button class="segment-speaker" type="button" hidden></button>
+        <time class="segment-time"></time>
+        <span class="segment-duration"></span>
+      </div>
+      <p class="segment-text"></p>
+      <div class="segment-actions">
+        <audio controls preload="none"></audio>
+        <a class="download-link" download>下载录音</a>
+      </div>
+    </li>
+  </template>
+
+  <dialog class="dialog" id="speakerDialog" aria-labelledby="speakerDialogTitle">
+    <form class="dialog-form" id="speakerForm" method="dialog">
+      <h2 id="speakerDialogTitle">标注说话人</h2>
+      <p class="dialog-hint">稳定标签：<span id="speakerDialogLabel"></span></p>
+      <label class="field">
+        <span>显示名</span>
+        <input id="speakerAliasInput" type="text" maxlength="32" autocomplete="off" placeholder="例如：章总">
+      </label>
+      <label class="field">
+        <span>合并到</span>
+        <select id="speakerMergeTarget">
+          <option value="">不合并</option>
+        </select>
+      </label>
+      <p class="dialog-hint" id="speakerMergeHint">将多个声纹标签合并为同一个人，合并后内容会重新分段。留空可取消合并。</p>
+      <p class="dialog-hint">留空显示名可清除人名，恢复显示稳定标签。只影响显示，不改写历史记录。</p>
+      <p class="dialog-error" id="speakerDialogError" hidden></p>
+      <div class="dialog-actions">
+        <button class="text-button" id="speakerCancel" type="button">取消</button>
+        <button class="primary-button dialog-submit" id="speakerSave" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

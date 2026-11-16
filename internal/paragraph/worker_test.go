@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -108,7 +109,7 @@ func TestWorkerMergesOnEverySegment(t *testing.T) {
 	worker.Notify(testSegment("a", "说话人1", "你好", testBase, testBase.Add(time.Second)))
 	waitFor(t, "first paragraph", func() bool { return len(paragraphStore.All()) == 1 })
 	first := paragraphStore.All()[0]
-	if first.ID != "a" || first.Source != SourceSingle {
+	if first.ID != "a" || first.Source != SourceLLM {
 		t.Fatalf("first paragraph = %+v", first)
 	}
 
@@ -125,7 +126,7 @@ func TestWorkerMergesOnEverySegment(t *testing.T) {
 	if !reflect.DeepEqual(paragraph.SegmentIDs, []string{"a", "b"}) {
 		t.Fatalf("segment ids = %v", paragraph.SegmentIDs)
 	}
-	if grouper.count() != 1 {
+	if grouper.count() != 2 {
 		t.Fatalf("model calls = %d", grouper.count())
 	}
 	select {
@@ -154,33 +155,37 @@ func TestWorkerMergesLongPausesWithoutSegment(t *testing.T) {
 	})
 
 	// No timer should fire on its own: only the new segment triggers merging.
-	if grouper.count() != 1 {
+	if grouper.count() != 2 {
 		t.Fatalf("model calls = %d", grouper.count())
 	}
 }
 
-func TestWorkerMergesOnSpeakerChange(t *testing.T) {
+func TestWorkerBuildsTopicAcrossSpeakerChange(t *testing.T) {
 	clock := newFakeClock(testBase)
 	paragraphStore := openTestStore(t)
-	grouper := &fakeGrouper{}
+	grouper := &fakeGrouper{fn: func(_ int, _ context.Context, texts []string) ([]Group, error) {
+		return []Group{{Start: 1, End: len(texts), Title: "预算审批", Summary: "确定预算和审批时间。"}}, nil
+	}}
 	worker := newTestWorker(t, clock, paragraphStore, nil, grouper)
 	worker.Start(context.Background())
 	defer worker.Close()
 
-	worker.Notify(testSegment("a", "说话人1", "一", testBase, testBase.Add(time.Second)))
+	worker.Notify(testSegment("a", "说话人1", "预算十万。", testBase, testBase.Add(time.Second)))
 	waitFor(t, "first paragraph", func() bool { return len(paragraphStore.All()) == 1 })
-	worker.Notify(testSegment("b", "说话人2", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
+	worker.Notify(testSegment("b", "说话人2", "周五前审批。", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
 
-	waitFor(t, "second paragraph", func() bool { return len(paragraphStore.All()) == 2 })
-	all := paragraphStore.All()
-	if all[0].ID != "a" || all[0].Source != SourceSingle || all[0].Text != "一" {
-		t.Fatalf("first paragraph = %+v", all[0])
+	waitFor(t, "multi-speaker topic", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 1 && all[0].Source == SourceLLM && len(all[0].SegmentIDs) == 2
+	})
+	topic := paragraphStore.All()[0]
+	if topic.Title != "预算审批" || topic.Speaker != "" || topic.Text != "预算十万。周五前审批。" {
+		t.Fatalf("topic = %+v", topic)
 	}
-	if all[1].ID != "b" || all[1].Source != SourceSingle || all[1].Text != "二" {
-		t.Fatalf("second paragraph = %+v", all[1])
-	}
-	if grouper.count() != 0 {
-		t.Fatalf("single segments should not call model")
+	calls := grouper.snapshot()
+	last := calls[len(calls)-1]
+	if !reflect.DeepEqual(last, []string{"说话人1：预算十万。", "说话人2：周五前审批。"}) {
+		t.Fatalf("model input = %v", last)
 	}
 }
 
@@ -220,10 +225,10 @@ func TestWorkerCapsTriggerMerge(t *testing.T) {
 			if all[0].Text != "你好世界" || !reflect.DeepEqual(all[0].SegmentIDs, []string{"a", "b"}) {
 				t.Fatalf("first paragraph = %+v", all[0])
 			}
-			if all[1].ID != "c" || all[1].Source != SourceSingle {
+			if all[1].ID != "c" || all[1].Source != SourceLLM {
 				t.Fatalf("second paragraph = %+v", all[1])
 			}
-			if grouper.count() != 1 {
+			if grouper.count() != 3 {
 				t.Fatalf("model calls = %d", grouper.count())
 			}
 		})
@@ -239,7 +244,9 @@ func TestWorkerFallsBackAndCoolsDown(t *testing.T) {
 		}
 		return []Group{{Start: 1, End: len(texts)}}, nil
 	}}
-	worker := newTestWorker(t, clock, paragraphStore, nil, grouper)
+	worker := NewWorker(WorkerOptions{
+		Store: paragraphStore, Grouper: grouper, Model: "test-model", MaxSegments: 2, Clock: clock, Logf: quietLogf,
+	})
 	worker.Start(context.Background())
 	defer worker.Close()
 
@@ -276,7 +283,7 @@ func TestWorkerFallsBackAndCoolsDown(t *testing.T) {
 		all := paragraphStore.All()
 		return len(all) == 3 && all[2].Source == SourceLLM && len(all[2].SegmentIDs) == 2
 	})
-	if grouper.count() != 3 {
+	if grouper.count() != 4 {
 		t.Fatalf("model calls = %d", grouper.count())
 	}
 }
@@ -285,12 +292,14 @@ func TestWorkerInvalidGroupingDoesNotCoolDown(t *testing.T) {
 	clock := newFakeClock(testBase)
 	paragraphStore := openTestStore(t)
 	grouper := &fakeGrouper{fn: func(call int, _ context.Context, texts []string) ([]Group, error) {
-		if call == 1 {
+		if call == 2 {
 			return nil, fmt.Errorf("%w: bad offsets", ErrInvalidGrouping)
 		}
 		return []Group{{Start: 1, End: len(texts)}}, nil
 	}}
-	worker := newTestWorker(t, clock, paragraphStore, nil, grouper)
+	worker := NewWorker(WorkerOptions{
+		Store: paragraphStore, Grouper: grouper, Model: "test-model", MaxSegments: 2, Clock: clock, Logf: quietLogf,
+	})
 	worker.Start(context.Background())
 	defer worker.Close()
 
@@ -305,7 +314,7 @@ func TestWorkerInvalidGroupingDoesNotCoolDown(t *testing.T) {
 	worker.Notify(testSegment("b1", "说话人2", "三", testBase.Add(4*time.Second), testBase.Add(5*time.Second)))
 	waitFor(t, "fallback retried without cooldown", func() bool {
 		all := paragraphStore.All()
-		return len(all) == 2 && all[0].Source == SourceLLM && grouper.count() == 2
+		return len(all) == 2 && all[0].Source == SourceLLM && grouper.count() >= 3
 	})
 	worker.Notify(testSegment("b2", "说话人2", "四", testBase.Add(6*time.Second), testBase.Add(7*time.Second)))
 
@@ -313,7 +322,7 @@ func TestWorkerInvalidGroupingDoesNotCoolDown(t *testing.T) {
 		all := paragraphStore.All()
 		return len(all) == 2 && all[1].Source == SourceLLM
 	})
-	if grouper.count() != 3 {
+	if grouper.count() != 4 {
 		t.Fatalf("model calls = %d", grouper.count())
 	}
 }
@@ -370,7 +379,10 @@ func TestWorkerBackfillSkipsCoveredAndRetriesFallback(t *testing.T) {
 
 	clock := newFakeClock(s4.EndedAt.Add(5 * time.Minute))
 	grouper := &fakeGrouper{}
-	worker := newTestWorker(t, clock, paragraphStore, fakeSegments{s1, s2, s3, s4}, grouper)
+	worker := NewWorker(WorkerOptions{
+		Store: paragraphStore, Segments: fakeSegments{s1, s2, s3, s4}, Grouper: grouper,
+		Model: "test-model", MaxSegments: 2, Clock: clock, Logf: quietLogf,
+	})
 	worker.Start(context.Background())
 	defer worker.Close()
 
@@ -382,7 +394,7 @@ func TestWorkerBackfillSkipsCoveredAndRetriesFallback(t *testing.T) {
 		t.Fatalf("model calls = %d", grouper.count())
 	}
 	calls := grouper.snapshot()
-	if !reflect.DeepEqual(calls[0], []string{"三", "四"}) {
+	if !reflect.DeepEqual(calls[0], []string{"说话人2：三", "说话人2：四"}) {
 		t.Fatalf("model saw %v", calls[0])
 	}
 	all := paragraphStore.All()
@@ -450,7 +462,10 @@ func TestWorkerLiveRunsBeforeBackfill(t *testing.T) {
 	if err := paragraphStore.SaveMany([]Paragraph{testParagraph("c1", c1.StartedAt, "c1", "c2")}); err != nil {
 		t.Fatal(err)
 	}
-	worker := newTestWorker(t, clock, paragraphStore, fakeSegments{a1, a2, b1, b2, c1, c2}, grouper)
+	worker := NewWorker(WorkerOptions{
+		Store: paragraphStore, Segments: fakeSegments{a1, a2, b1, b2, c1, c2}, Grouper: grouper,
+		Model: "test-model", MaxSegments: 2, Clock: clock, Logf: quietLogf,
+	})
 	worker.Start(context.Background())
 	defer worker.Close()
 
@@ -462,13 +477,13 @@ func TestWorkerLiveRunsBeforeBackfill(t *testing.T) {
 
 	waitFor(t, "processed live run", func() bool { return grouper.count() == 3 })
 	calls := grouper.snapshot()
-	if !reflect.DeepEqual(calls[0], []string{"旧一", "旧二"}) {
+	if !reflect.DeepEqual(calls[0], []string{"说话人1：旧一", "说话人1：旧二"}) {
 		t.Fatalf("first call = %v", calls[0])
 	}
-	if !reflect.DeepEqual(calls[1], []string{"实时一", "实时二"}) {
+	if !reflect.DeepEqual(calls[1], []string{"说话人4：实时一", "说话人4：实时二"}) {
 		t.Fatalf("live run was not preferred: %v", calls[1])
 	}
-	if !reflect.DeepEqual(calls[2], []string{"旧三", "旧四"}) {
+	if !reflect.DeepEqual(calls[2], []string{"说话人2：旧三", "说话人2：旧四"}) {
 		t.Fatalf("third call = %v", calls[2])
 	}
 }
@@ -514,6 +529,63 @@ func TestWorkerNotifyBeforeStartOrAfterClose(t *testing.T) {
 	}
 }
 
+func TestWorkerSplitRecent(t *testing.T) {
+	one := testSegment("a1", "说话人1", "一", testBase, testBase.Add(time.Second))
+	two := testSegment("a2", "说话人1", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
+	base2 := testBase.Add(5 * time.Minute)
+	three := testSegment("b1", "说话人2", "三", base2, base2.Add(time.Second))
+	four := testSegment("b2", "说话人2", "四", base2.Add(2*time.Second), base2.Add(3*time.Second))
+	segments := []store.Segment{one, two, three, four}
+	paragraphStore := openTestStore(t)
+	if err := paragraphStore.SaveMany([]Paragraph{
+		{ID: "a1", StartedAt: one.StartedAt, EndedAt: two.EndedAt, Text: "旧段落", SegmentIDs: []string{"a1", "a2"}, Source: SourceFallback},
+		{ID: "b1", StartedAt: three.StartedAt, EndedAt: four.EndedAt, Text: "三四", SegmentIDs: []string{"b1", "b2"}, Source: SourceFallback},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	grouper := &fakeGrouper{fn: func(_ int, _ context.Context, texts []string) ([]Group, error) {
+		groups := make([]Group, len(texts))
+		for i := range texts {
+			groups[i] = Group{Start: i + 1, End: i + 1}
+		}
+		return groups, nil
+	}}
+	worker := NewWorker(WorkerOptions{
+		Store: paragraphStore, Segments: fakeSegments(segments), Grouper: grouper,
+		Model: "test-model", MaxSegments: 2, Clock: newFakeClock(testBase), Logf: quietLogf,
+	})
+	events := make(chan Paragraph, 4)
+	worker.SetOnParagraph(func(p Paragraph) { events <- p })
+
+	stats, err := worker.SplitRecent(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := RebuildStats{Runs: 1, LLM: 1, Paragraphs: 2}
+	if stats != want {
+		t.Fatalf("stats = %+v, want %+v", stats, want)
+	}
+	all := paragraphStore.All()
+	if len(all) != 3 || all[0].Text != "旧段落" || all[1].Text != "三" || all[2].Text != "四" {
+		t.Fatalf("paragraphs = %+v", all)
+	}
+	for _, paragraph := range all[1:] {
+		if paragraph.Source != SourceLLM {
+			t.Fatalf("source = %q, want %q", paragraph.Source, SourceLLM)
+		}
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2", len(events))
+	}
+}
+
+func TestWorkerSplitRecentUnavailable(t *testing.T) {
+	worker := newTestWorker(t, newFakeClock(testBase), openTestStore(t), fakeSegments{}, nil)
+	if _, err := worker.SplitRecent(context.Background(), 500); !errors.Is(err, ErrSplitUnavailable) {
+		t.Fatalf("error = %v, want ErrSplitUnavailable", err)
+	}
+}
+
 func TestRebuild(t *testing.T) {
 	one := testSegment("a1", "说话人1", "一", testBase, testBase.Add(time.Second))
 	two := testSegment("a2", "说话人1", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
@@ -537,14 +609,14 @@ func TestRebuild(t *testing.T) {
 
 	var progress [][2]int
 	stats, err := Rebuild(context.Background(), paragraphStore,
-		[]store.Segment{one, two, three, four, five}, grouper, nil, "m", RunOptions{},
+		[]store.Segment{one, two, three, four, five}, grouper, nil, "m", RunOptions{MaxSegments: 2},
 		newFakeClock(base3.Add(time.Hour)), nil, func(done, total int) {
 			progress = append(progress, [2]int{done, total})
 		})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := RebuildStats{Runs: 3, LLM: 2, Single: 1, Fallback: 0, Paragraphs: 5}
+	want := RebuildStats{Runs: 3, LLM: 3, Single: 0, Fallback: 0, Paragraphs: 5}
 	if stats != want {
 		t.Fatalf("stats = %+v, want %+v", stats, want)
 	}
@@ -560,7 +632,7 @@ func TestRebuild(t *testing.T) {
 			t.Fatal("stale paragraph survived rebuild")
 		}
 	}
-	if grouper.count() != 2 {
+	if grouper.count() != 3 {
 		t.Fatalf("model calls = %d", grouper.count())
 	}
 }
@@ -604,7 +676,7 @@ func TestRebuildRetriesAfterInvalidGrouping(t *testing.T) {
 	}}
 	paragraphStore := openTestStore(t)
 	stats, err := Rebuild(context.Background(), paragraphStore, []store.Segment{one, two, three, four},
-		grouper, nil, "m", RunOptions{}, newFakeClock(base2), nil, nil)
+		grouper, nil, "m", RunOptions{MaxSegments: 2}, newFakeClock(base2), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +758,7 @@ func TestWorkerReloadDropsDeletedSegments(t *testing.T) {
 		if len(all[0].SegmentIDs) != 1 || all[0].SegmentIDs[0] != "b" {
 			return false
 		}
-		return all[0].Source == SourceSingle
+		return all[0].Source == SourceLLM
 	})
 }
 
@@ -720,11 +792,12 @@ func TestWorkerCorrectsParagraphText(t *testing.T) {
 		return []string{"摘要总结。"}, nil
 	}}
 	worker := NewWorker(WorkerOptions{
-		Store:     paragraphStore,
-		Corrector: corrector,
-		Model:     "test-model",
-		Clock:     clock,
-		Logf:      quietLogf,
+		Store:       paragraphStore,
+		Corrector:   corrector,
+		Model:       "test-model",
+		MaxSegments: 1,
+		Clock:       clock,
+		Logf:        quietLogf,
 	})
 	worker.Start(context.Background())
 	defer worker.Close()
@@ -738,7 +811,7 @@ func TestWorkerCorrectsParagraphText(t *testing.T) {
 		t.Fatalf("open run must not trigger correction, calls = %d", corrector.count())
 	}
 
-	// A speaker change closes the run; only then is correction applied.
+	// Reaching the run cap closes the previous run; only then is correction applied.
 	worker.Notify(testSegment("b", "说话人2", "另一句。", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
 	waitFor(t, "corrected paragraph", func() bool {
 		for _, paragraph := range paragraphStore.All() {
@@ -762,11 +835,12 @@ func TestWorkerSavesOriginalWhenCorrectionFails(t *testing.T) {
 		return nil, errors.New("connection refused")
 	}}
 	worker := NewWorker(WorkerOptions{
-		Store:     paragraphStore,
-		Corrector: corrector,
-		Model:     "test-model",
-		Clock:     clock,
-		Logf:      quietLogf,
+		Store:       paragraphStore,
+		Corrector:   corrector,
+		Model:       "test-model",
+		MaxSegments: 1,
+		Clock:       clock,
+		Logf:        quietLogf,
 	})
 	worker.Start(context.Background())
 	defer worker.Close()
@@ -808,5 +882,362 @@ func TestRebuildAppliesCorrections(t *testing.T) {
 	all := paragraphStore.All()
 	if len(all) != 1 || all[0].Text != "摘要总结。" {
 		t.Fatalf("paragraphs = %v", all)
+	}
+}
+
+func compareSegments() (a1, a2, b1, b2 store.Segment) {
+	a1 = testSegment("a1", "说话人1", "在要", testBase, testBase.Add(time.Second))
+	a2 = testSegment("a2", "说话人1", "总结。", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
+	base2 := testBase.Add(5 * time.Minute)
+	b1 = testSegment("b1", "说话人2", "三", base2, base2.Add(time.Second))
+	b2 = testSegment("b2", "说话人2", "四", base2.Add(2*time.Second), base2.Add(3*time.Second))
+	return
+}
+
+func seedCompareStore(t *testing.T, a1, a2, b1, b2 store.Segment) *Store {
+	t.Helper()
+	paragraphStore := openTestStore(t)
+	err := paragraphStore.SaveMany([]Paragraph{
+		{ID: "a1", StartedAt: a1.StartedAt, EndedAt: a2.EndedAt, Speaker: "说话人1", Text: "摘要总结。", SegmentIDs: []string{"a1", "a2"}, Source: SourceLLM},
+		{ID: "b1", StartedAt: b1.StartedAt, EndedAt: b2.EndedAt, Speaker: "说话人2", Text: "三四", SegmentIDs: []string{"b1", "b2"}, Source: SourceLLM},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return paragraphStore
+}
+
+func TestCompareRecentSelectsOnlyRecentRunsAndDoesNotWrite(t *testing.T) {
+	a1, a2, b1, b2 := compareSegments()
+	paragraphStore := seedCompareStore(t, a1, a2, b1, b2)
+	before := paragraphStore.All()
+
+	grouper := &fakeGrouper{}
+	corrector := &fakeCorrector{fn: func(_ context.Context, texts []string) ([]string, error) {
+		out := make([]string, len(texts))
+		for i, text := range texts {
+			out[i] = strings.Replace(text, "四", "思", 1)
+		}
+		return out, nil
+	}}
+
+	// The last two segments (b1, b2) form run B, so only run B is compared.
+	comparisons, err := CompareRecent(context.Background(), paragraphStore,
+		[]store.Segment{a1, a2, b1, b2}, grouper, corrector, "trial-model", RunOptions{MaxSegments: 2},
+		newFakeClock(b2.EndedAt), nil, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comparisons) != 1 {
+		t.Fatalf("comparisons = %d, want 1", len(comparisons))
+	}
+	c := comparisons[0]
+	if c.Speaker != "说话人2" || c.Raw != "三四" || c.Before != "三四" || c.After != "三思" {
+		t.Fatalf("comparison = %+v", c)
+	}
+	if !reflect.DeepEqual(paragraphStore.All(), before) {
+		t.Fatal("CompareRecent must not modify the store")
+	}
+}
+
+func TestCompareRecentClampsNAndSelectsAllRuns(t *testing.T) {
+	a1, a2, b1, b2 := compareSegments()
+	paragraphStore := seedCompareStore(t, a1, a2, b1, b2)
+
+	comparisons, err := CompareRecent(context.Background(), paragraphStore,
+		[]store.Segment{a1, a2, b1, b2}, &fakeGrouper{}, nil, "trial-model", RunOptions{MaxSegments: 2},
+		newFakeClock(b2.EndedAt), nil, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comparisons) != 2 {
+		t.Fatalf("comparisons = %d, want 2", len(comparisons))
+	}
+	if comparisons[0].Before != "摘要总结。" || comparisons[0].After != "在要总结。" {
+		t.Fatalf("first comparison = %+v", comparisons[0])
+	}
+}
+
+func TestWorkerCorrectionToggle(t *testing.T) {
+	clock := newFakeClock(testBase)
+	paragraphStore := openTestStore(t)
+	corrector := &fakeCorrector{fn: func(_ context.Context, texts []string) ([]string, error) {
+		out := make([]string, len(texts))
+		for i, text := range texts {
+			out[i] = strings.Replace(text, "在要", "摘要", 1)
+		}
+		return out, nil
+	}}
+	worker := NewWorker(WorkerOptions{
+		Store:       paragraphStore,
+		Corrector:   corrector,
+		Model:       "test-model",
+		MaxSegments: 1,
+		Clock:       clock,
+		Logf:        quietLogf,
+	})
+	if !worker.correctionEnabled() {
+		t.Fatal("correction should default on when a corrector is present")
+	}
+	worker.Start(context.Background())
+	defer worker.Close()
+
+	textOf := func(id string) string {
+		for _, paragraph := range paragraphStore.All() {
+			if paragraph.ID == id {
+				return paragraph.Text
+			}
+		}
+		return ""
+	}
+
+	// Correction on: closing run [a] applies the correction.
+	worker.Notify(testSegment("a", "说话人1", "在要一。", testBase, testBase.Add(time.Second)))
+	waitFor(t, "open a", func() bool { return len(paragraphStore.All()) == 1 })
+	worker.Notify(testSegment("b", "说话人2", "在要二。", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
+	waitFor(t, "corrected a", func() bool { return textOf("a") == "摘要一。" && corrector.count() == 1 })
+
+	// Pause correction: closing run [b] must keep its original text.
+	worker.SetCorrectionEnabled(false)
+	worker.Notify(testSegment("c", "说话人3", "在要三。", testBase.Add(4*time.Second), testBase.Add(5*time.Second)))
+	waitFor(t, "uncorrected b", func() bool { return textOf("b") == "在要二。" && len(paragraphStore.All()) == 3 })
+	if corrector.count() != 1 {
+		t.Fatalf("paused correction still called the corrector: %d", corrector.count())
+	}
+
+	// Resume correction: closing run [c] applies it again.
+	worker.SetCorrectionEnabled(true)
+	worker.Notify(testSegment("d", "说话人4", "在要四。", testBase.Add(6*time.Second), testBase.Add(7*time.Second)))
+	waitFor(t, "corrected c", func() bool { return textOf("c") == "摘要三。" && corrector.count() == 2 })
+}
+
+func TestWorkerSetModelStampsParagraphs(t *testing.T) {
+	clock := newFakeClock(testBase)
+	paragraphStore := openTestStore(t)
+	grouper := &fakeGrouper{}
+	worker := NewWorker(WorkerOptions{
+		Store:   paragraphStore,
+		Grouper: grouper,
+		Model:   "old-model",
+		Clock:   clock,
+		Logf:    quietLogf,
+	})
+	worker.Start(context.Background())
+	defer worker.Close()
+
+	worker.Notify(testSegment("a", "说话人1", "一", testBase, testBase.Add(time.Second)))
+	waitFor(t, "old model stamp", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 1 && all[0].Model == "old-model"
+	})
+
+	worker.SetModel("new-model")
+	worker.Notify(testSegment("b", "说话人1", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
+	waitFor(t, "new model stamp", func() bool {
+		all := paragraphStore.All()
+		return len(all) == 1 && len(all[0].SegmentIDs) == 2 && all[0].Model == "new-model"
+	})
+}
+
+func TestWorkerCorrectRecentManually(t *testing.T) {
+	clock := newFakeClock(testBase)
+	segments := []store.Segment{
+		testSegment("a", "说话人1", "在要甲。", testBase, testBase.Add(time.Second)),
+		testSegment("b", "说话人1", "在要乙。", testBase.Add(2*time.Second), testBase.Add(3*time.Second)),
+		testSegment("c", "说话人1", "在要丙。", testBase.Add(4*time.Second), testBase.Add(5*time.Second)),
+	}
+	paragraphStore := openTestStore(t)
+	stored := make([]Paragraph, len(segments))
+	for i, segment := range segments {
+		stored[i] = Paragraph{
+			ID: segment.ID, StartedAt: segment.StartedAt, EndedAt: segment.EndedAt,
+			Speaker: segment.Speaker, Text: segment.Text, SegmentIDs: []string{segment.ID}, Source: SourceLLM,
+		}
+	}
+	if err := paragraphStore.SaveMany(stored); err != nil {
+		t.Fatal(err)
+	}
+	corrector := &fakeCorrector{fn: func(_ context.Context, texts []string) ([]string, error) {
+		if !reflect.DeepEqual(texts, []string{"在要乙。", "在要丙。"}) {
+			t.Fatalf("correction input = %v", texts)
+		}
+		return []string{"摘要乙。", "在要丙。"}, nil
+	}}
+	worker := NewWorker(WorkerOptions{
+		Store: paragraphStore, Segments: fakeSegments(segments), Corrector: corrector,
+		Model: "manual-model", Clock: clock, Logf: quietLogf,
+	})
+	worker.SetCorrectionEnabled(false)
+	events := make(chan Paragraph, 1)
+	worker.SetOnParagraph(func(p Paragraph) { events <- p })
+	worker.Start(context.Background())
+	defer worker.Close()
+
+	result, err := worker.CorrectRecent(context.Background(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Paragraphs != 2 || result.Changed != 1 {
+		t.Fatalf("result = %+v", result)
+	}
+	all := paragraphStore.All()
+	if all[0].Text != "在要甲。" || all[1].Text != "摘要乙。" || all[2].Text != "在要丙。" {
+		t.Fatalf("paragraphs = %+v", all)
+	}
+	if all[1].Model != "manual-model" || !all[1].UpdatedAt.Equal(testBase) {
+		t.Fatalf("corrected metadata = %+v", all[1])
+	}
+	select {
+	case event := <-events:
+		if event.ID != "b" || event.Text != "摘要乙。" {
+			t.Fatalf("event = %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("manual correction event not fired")
+	}
+}
+
+func TestWorkerRetranscribeParagraphUpdatesOnlyTarget(t *testing.T) {
+	segments := []store.Segment{
+		{ID: "a", Text: "旧一"},
+		{ID: "b", Text: "旧二"},
+		{ID: "c", Text: "其他"},
+	}
+	paragraphStore := openTestStore(t)
+	if err := paragraphStore.SaveMany([]Paragraph{
+		{ID: "a", Text: "旧一旧二", SegmentIDs: []string{"a", "b"}},
+		{ID: "c", Text: "其他", SegmentIDs: []string{"c"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	worker := NewWorker(WorkerOptions{
+		Store:    paragraphStore,
+		Segments: fakeSegments(segments),
+		Logf:     quietLogf,
+		Retranscribe: func(_ context.Context, selected []store.Segment) ([]store.Segment, int, error) {
+			if len(selected) != 2 || selected[0].ID != "a" || selected[1].ID != "b" {
+				t.Fatalf("selected = %+v", selected)
+			}
+			selected[0].Text = "新一"
+			selected[1].Text = "新二"
+			return selected, 2, nil
+		},
+	})
+	result, err := worker.RetranscribeParagraph(context.Background(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Paragraphs != 1 || result.Segments != 2 || result.Changed != 2 {
+		t.Fatalf("result = %+v", result)
+	}
+	all := paragraphStore.All()
+	if len(all) != 2 || all[0].Text != "新一新二" || all[1].Text != "其他" {
+		t.Fatalf("paragraphs = %+v", all)
+	}
+}
+
+func TestWorkerRetranscribeParagraphRefreshesDerivedTextWithoutRawChanges(t *testing.T) {
+	paragraphStore := openTestStore(t)
+	if err := paragraphStore.SaveMany([]Paragraph{{ID: "a", Text: "语义修正后的文本", SegmentIDs: []string{"a"}}}); err != nil {
+		t.Fatal(err)
+	}
+	worker := NewWorker(WorkerOptions{
+		Store: paragraphStore,
+		Logf:  quietLogf,
+		Retranscribe: func(_ context.Context, selected []store.Segment) ([]store.Segment, int, error) {
+			selected[0].Text = "最新原始识别"
+			return selected, 0, nil
+		},
+	})
+	result, err := worker.RetranscribeParagraph(context.Background(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed != 0 || paragraphStore.All()[0].Text != "最新原始识别" {
+		t.Fatalf("result = %+v, paragraph = %+v", result, paragraphStore.All()[0])
+	}
+}
+
+func TestWorkerRetranscribeParagraphUnavailable(t *testing.T) {
+	worker := NewWorker(WorkerOptions{Store: openTestStore(t), Logf: quietLogf})
+	if _, err := worker.RetranscribeParagraph(context.Background(), "a"); !errors.Is(err, ErrASRUnavailable) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+type fakeSummarizer struct {
+	summary string
+	input   string
+}
+
+func (f *fakeSummarizer) Summarize(_ context.Context, text string) (string, error) {
+	f.input = text
+	return f.summary, nil
+}
+
+func TestWorkerSummarizeParagraphOnlyTarget(t *testing.T) {
+	paragraphStore := openTestStore(t)
+	if err := paragraphStore.SaveMany([]Paragraph{
+		{ID: "a", Text: "讨论发布安排", Summary: "旧主题简介", SegmentIDs: []string{"a"}},
+		{ID: "b", Text: "其他段落", SegmentIDs: []string{"b"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	summarizer := &fakeSummarizer{summary: "确定了发布安排。"}
+	worker := NewWorker(WorkerOptions{Store: paragraphStore, Summarizer: summarizer, Logf: quietLogf})
+	result, err := worker.SummarizeParagraph(context.Background(), "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Paragraphs != 1 || result.Summary != "确定了发布安排。" || summarizer.input != "讨论发布安排" {
+		t.Fatalf("result = %+v, input = %q", result, summarizer.input)
+	}
+	all := paragraphStore.All()
+	if all[0].Digest != "确定了发布安排。" || all[0].Summary != "旧主题简介" || all[1].Digest != "" {
+		t.Fatalf("paragraphs = %+v", all)
+	}
+}
+
+func TestWorkerCorrectParagraphOnlyTarget(t *testing.T) {
+	clock := newFakeClock(testBase)
+	segments := []store.Segment{
+		testSegment("a", "说话人1", "在要甲。", testBase, testBase.Add(time.Second)),
+		testSegment("b", "说话人2", "在要乙。", testBase.Add(2*time.Second), testBase.Add(3*time.Second)),
+	}
+	paragraphStore := openTestStore(t)
+	for _, segment := range segments {
+		if err := paragraphStore.SaveMany([]Paragraph{{
+			ID: segment.ID, StartedAt: segment.StartedAt, EndedAt: segment.EndedAt,
+			Speaker: segment.Speaker, Text: segment.Text, SegmentIDs: []string{segment.ID}, Source: SourceLLM,
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	corrector := &fakeCorrector{fn: func(_ context.Context, texts []string) ([]string, error) {
+		if !reflect.DeepEqual(texts, []string{"在要乙。"}) {
+			t.Fatalf("correction input = %v", texts)
+		}
+		return []string{"摘要乙。"}, nil
+	}}
+	worker := NewWorker(WorkerOptions{
+		Store: paragraphStore, Segments: fakeSegments(segments), Corrector: corrector,
+		Model: "manual-model", Clock: clock, Logf: quietLogf,
+	})
+	worker.Start(context.Background())
+	defer worker.Close()
+
+	result, err := worker.CorrectParagraph(context.Background(), "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Paragraphs != 1 || result.Changed != 1 {
+		t.Fatalf("result = %+v", result)
+	}
+	all := paragraphStore.All()
+	if all[0].Text != "在要甲。" || all[1].Text != "摘要乙。" {
+		t.Fatalf("paragraphs = %+v", all)
+	}
+	if _, err := worker.CorrectParagraph(context.Background(), "missing"); !errors.Is(err, ErrParagraphNotFound) {
+		t.Fatalf("missing paragraph error = %v", err)
 	}
 }

@@ -24,13 +24,13 @@ func runIDs(runs [][]store.Segment) [][]string {
 	return ids
 }
 
-func TestBuildRunsSplitsOnSpeakerChange(t *testing.T) {
-	a := testSegment("a", "说话人1", "一", testBase, testBase.Add(time.Second))
-	b := testSegment("b", "说话人1", "二", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
-	c := testSegment("c", "说话人2", "三", testBase.Add(4*time.Second), testBase.Add(5*time.Second))
+func TestBuildRunsKeepsMeetingAcrossSpeakerChanges(t *testing.T) {
+	a := testSegment("a", "说话人1", "预算控制在十万。", testBase, testBase.Add(time.Second))
+	b := testSegment("b", "说话人2", "同意，但审批要在周五前完成。", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
+	c := testSegment("c", "说话人1", "那我今天提交申请。", testBase.Add(4*time.Second), testBase.Add(5*time.Second))
 
 	runs := BuildRuns([]store.Segment{a, b, c}, RunOptions{})
-	want := [][]string{{"a", "b"}, {"c"}}
+	want := [][]string{{"a", "b", "c"}}
 	if got := runIDs(runs); !reflect.DeepEqual(got, want) {
 		t.Fatalf("runs = %v, want %v", got, want)
 	}
@@ -136,16 +136,16 @@ func TestNormalizeGroups(t *testing.T) {
 		changed bool
 		ok      bool
 	}{
-		{"single full", []Group{{1, 3}}, 3, []Group{{1, 3}}, false, true},
-		{"split", []Group{{1, 2}, {3, 3}}, 3, []Group{{1, 2}, {3, 3}}, false, true},
-		{"gap between groups", []Group{{1, 1}, {3, 3}}, 3, []Group{{1, 1}, {2, 3}}, true, true},
-		{"leading gap", []Group{{3, 5}}, 5, []Group{{1, 5}}, true, true},
-		{"trailing gap", []Group{{1, 2}}, 5, []Group{{1, 5}}, true, true},
+		{"single full", []Group{{Start: 1, End: 3}}, 3, []Group{{Start: 1, End: 3}}, false, true},
+		{"split", []Group{{Start: 1, End: 2}, {Start: 3, End: 3}}, 3, []Group{{Start: 1, End: 2}, {Start: 3, End: 3}}, false, true},
+		{"gap between groups", []Group{{Start: 1, End: 1}, {Start: 3, End: 3}}, 3, []Group{{Start: 1, End: 1}, {Start: 2, End: 3}}, true, true},
+		{"leading gap", []Group{{Start: 3, End: 5}}, 5, []Group{{Start: 1, End: 5}}, true, true},
+		{"trailing gap", []Group{{Start: 1, End: 2}}, 5, []Group{{Start: 1, End: 5}}, true, true},
 		{"empty groups", nil, 3, nil, false, false},
-		{"no sentences", []Group{{1, 1}}, 0, nil, false, false},
-		{"overlap", []Group{{1, 2}, {2, 3}}, 3, nil, false, false},
-		{"out of range", []Group{{1, 4}}, 3, nil, false, false},
-		{"reversed", []Group{{1, 0}}, 3, nil, false, false},
+		{"no sentences", []Group{{Start: 1, End: 1}}, 0, nil, false, false},
+		{"overlap", []Group{{Start: 1, End: 2}, {Start: 2, End: 3}}, 3, nil, false, false},
+		{"out of range", []Group{{Start: 1, End: 4}}, 3, nil, false, false},
+		{"reversed", []Group{{Start: 1, End: 0}}, 3, nil, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -175,7 +175,10 @@ func TestComposeParagraphsKeepsVerbatimTextAndIDs(t *testing.T) {
 	c := testSegment("c", "说话人1", "", testBase.Add(4*time.Second), testBase.Add(5*time.Second))
 	now := testBase.Add(time.Hour)
 
-	paragraphs := ComposeParagraphs([]store.Segment{a, b, c}, []Group{{1, 2}, {3, 3}}, SourceLLM, "model-x", now, nil)
+	paragraphs := ComposeParagraphs([]store.Segment{a, b, c}, []Group{
+		{Start: 1, End: 2, Title: "问候", Summary: "中英文问候。"},
+		{Start: 3, End: 3},
+	}, SourceLLM, "model-x", now, nil)
 	if len(paragraphs) != 2 {
 		t.Fatalf("paragraphs = %d", len(paragraphs))
 	}
@@ -185,6 +188,12 @@ func TestComposeParagraphsKeepsVerbatimTextAndIDs(t *testing.T) {
 	}
 	if first.Text != "你好world" {
 		t.Fatalf("first text = %q", first.Text)
+	}
+	if first.Title != "问候" || first.Summary != "中英文问候。" || !first.HasTopic() {
+		t.Fatalf("first topic = %q / %q", first.Title, first.Summary)
+	}
+	if second := paragraphs[1]; second.Title != "" || second.Summary != "" || second.HasTopic() {
+		t.Fatalf("empty paragraph topic = %q / %q", second.Title, second.Summary)
 	}
 	if first.Speaker != "说话人1" || first.Source != SourceLLM || first.Model != "model-x" {
 		t.Fatalf("first metadata = %+v", first)
@@ -198,12 +207,77 @@ func TestComposeParagraphsKeepsVerbatimTextAndIDs(t *testing.T) {
 	}
 }
 
+func TestComposeParagraphsBuildsMultiSpeakerTopic(t *testing.T) {
+	a := testSegment("a", "说话人1", "预算控制在十万。", testBase, testBase.Add(time.Second))
+	b := testSegment("b", "说话人2", "同意，周五前完成审批。", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
+
+	paragraphs := ComposeParagraphs([]store.Segment{a, b}, []Group{{
+		Start: 1, End: 2, Title: "预算与审批", Summary: "确定预算上限和审批时限。",
+	}}, SourceLLM, "model-x", testBase, nil)
+	if len(paragraphs) != 1 {
+		t.Fatalf("paragraphs = %d", len(paragraphs))
+	}
+	topic := paragraphs[0]
+	if topic.Speaker != "" || topic.Text != "预算控制在十万。同意，周五前完成审批。" {
+		t.Fatalf("topic = %+v", topic)
+	}
+	if topic.Title != "预算与审批" || !topic.HasTopic() {
+		t.Fatalf("topic metadata = %+v", topic)
+	}
+}
+
+func TestComposeParagraphsExcludesLowValueConversation(t *testing.T) {
+	segment := testSegment("a", "说话人1", "早上好，吃饭了吗？", testBase, testBase.Add(time.Second))
+	paragraphs := ComposeParagraphs([]store.Segment{segment}, []Group{{
+		Start: 1, End: 1, Title: "寒暄", Summary: "日常问候。", TopicExcluded: true,
+	}}, SourceLLM, "m", testBase, nil)
+	if len(paragraphs) != 1 || paragraphs[0].HasTopic() {
+		t.Fatalf("paragraphs = %+v", paragraphs)
+	}
+	if paragraphs[0].Title != "" || paragraphs[0].Summary != "" || !paragraphs[0].TopicExcluded {
+		t.Fatalf("low-value metadata = %+v", paragraphs[0])
+	}
+}
+
+func TestParagraphHasTopic(t *testing.T) {
+	cases := []struct {
+		text string
+		want bool
+	}{
+		{"", false},
+		{"  ……  ", false},
+		{"（未识别出文字）", false},
+		{"嗯，啊。", false},
+		{"呃 哦 哎", false},
+		{"哈哈哈", false},
+		{"um uh hmm", false},
+		{"预算", true},
+		{"哈密瓜", true},
+		{"嗯，预算怎么安排？", true},
+		{"hello world", true},
+	}
+	for _, tc := range cases {
+		p := Paragraph{Text: tc.text, Title: "语气", Summary: "语气"}
+		if got := p.HasTopic(); got != tc.want {
+			t.Errorf("HasTopic(%q) = %v, want %v", tc.text, got, tc.want)
+		}
+	}
+}
+
+func TestComposeParagraphsSkipsFillerTopic(t *testing.T) {
+	segment := testSegment("a", "说话人1", "嗯，啊。", testBase, testBase.Add(time.Second))
+	paragraphs := ComposeParagraphs([]store.Segment{segment}, []Group{{Start: 1, End: 1, Title: "语气", Summary: "语气"}}, SourceLLM, "m", testBase, nil)
+	if len(paragraphs) != 1 || paragraphs[0].Title != "" || paragraphs[0].Summary != "" {
+		t.Fatalf("paragraphs = %+v", paragraphs)
+	}
+}
+
 func TestFallbackGroups(t *testing.T) {
 	if groups := FallbackGroups(0); groups != nil {
 		t.Fatalf("groups = %v", groups)
 	}
 	groups := FallbackGroups(3)
-	if len(groups) != 1 || groups[0] != (Group{Start: 1, End: 3}) {
+	if len(groups) != 1 || groups[0] != (Group{Start: 1, End: 3, TopicExcluded: true}) {
 		t.Fatalf("groups = %v", groups)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"diting/internal/store"
 )
@@ -20,30 +21,130 @@ const (
 )
 
 type Paragraph struct {
-	ID         string    `json:"id"`
-	StartedAt  time.Time `json:"startedAt"`
-	EndedAt    time.Time `json:"endedAt"`
-	Speaker    string    `json:"speaker,omitempty"`
-	Text       string    `json:"text"`
-	SegmentIDs []string  `json:"segmentIds"`
-	Source     string    `json:"source"`
-	Model      string    `json:"model,omitempty"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	ID            string    `json:"id"`
+	StartedAt     time.Time `json:"startedAt"`
+	EndedAt       time.Time `json:"endedAt"`
+	Speaker       string    `json:"speaker,omitempty"`
+	Text          string    `json:"text"`
+	Title         string    `json:"title,omitempty"`
+	Summary       string    `json:"summary,omitempty"`
+	Digest        string    `json:"digest,omitempty"`
+	TopicExcluded bool      `json:"topicExcluded,omitempty"`
+	SegmentIDs    []string  `json:"segmentIds"`
+	Source        string    `json:"source"`
+	Model         string    `json:"model,omitempty"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
 func (p Paragraph) SegmentCount() int {
 	return len(p.SegmentIDs)
 }
 
+func (p Paragraph) HasTopic() bool {
+	return !p.TopicExcluded && hasTopicText(p.Text)
+}
+
+// TopicTitle and TopicSummary also provide useful labels for paragraphs saved
+// before topic metadata was introduced.
+func (p Paragraph) TopicTitle() string {
+	if !p.HasTopic() {
+		return ""
+	}
+	return topicTitle(p.Title, p.Text)
+}
+
+func (p Paragraph) TopicSummary() string {
+	if !p.HasTopic() {
+		return ""
+	}
+	return topicSummary(p.Summary, p.Text)
+}
+
+func hasTopicText(text string) bool {
+	text = compactTopicText(text)
+	if text == "" || text == "（未识别出文字）" || text == "(未识别出文字)" {
+		return false
+	}
+	var plain strings.Builder
+	for _, r := range text {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			plain.WriteRune(r)
+		}
+	}
+	normalized := strings.ToLower(plain.String())
+	if normalized == "" || normalized == "未识别出文字" {
+		return false
+	}
+	chineseFiller := true
+	for _, r := range normalized {
+		if !strings.ContainsRune("嗯啊呃哦噢哎唉诶欸嘿哈喂", r) {
+			chineseFiller = false
+			break
+		}
+	}
+	if chineseFiller {
+		return false
+	}
+	words := strings.Fields(text)
+	englishFiller := len(words) > 0
+	for _, word := range words {
+		word = strings.ToLower(strings.TrimFunc(word, func(r rune) bool {
+			return !unicode.IsLetter(r)
+		}))
+		switch word {
+		case "um", "umm", "uh", "uhh", "hm", "hmm", "hmmm", "er", "err", "ah", "oh", "hi", "hey", "hello":
+		default:
+			englishFiller = false
+		}
+	}
+	return !englishFiller
+}
+
+func topicTitle(title, text string) string {
+	title = compactTopicText(title)
+	if title == "" {
+		title = compactTopicText(text)
+	}
+	if title == "" {
+		return "无文字段落"
+	}
+	return truncateTopicText(title, 20)
+}
+
+func topicSummary(summary, text string) string {
+	summary = compactTopicText(summary)
+	if summary == "" {
+		summary = compactTopicText(text)
+	}
+	if summary == "" {
+		return "该段没有可识别的文字。"
+	}
+	return truncateTopicText(summary, 100)
+}
+
+func compactTopicText(text string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+}
+
+func truncateTopicText(text string, limit int) string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit-1]) + "…"
+}
+
 type Group struct {
-	Start int
-	End   int
+	Start         int
+	End           int
+	Title         string
+	Summary       string
+	TopicExcluded bool
 }
 
 type RunOptions struct {
 	MaxSegments int
 	MaxChars    int
-	Resolve     func(string) string
 }
 
 func (o RunOptions) withDefaults() RunOptions {
@@ -56,16 +157,9 @@ func (o RunOptions) withDefaults() RunOptions {
 	return o
 }
 
-func (o RunOptions) resolve(speaker string) string {
-	if o.Resolve != nil {
-		return o.Resolve(speaker)
-	}
-	return speaker
-}
-
-// BuildRuns groups consecutive segments by speaker, regardless of pauses.
-// Segment and character caps bound the prompt size; an oversized single
-// segment still forms a run.
+// BuildRuns keeps speaker turns together so the model can identify complete
+// meeting topics. Segment and character caps bound the prompt size; an oversized
+// single segment still forms a run.
 func BuildRuns(segments []store.Segment, opts RunOptions) [][]store.Segment {
 	opts = opts.withDefaults()
 	var runs [][]store.Segment
@@ -74,9 +168,7 @@ func BuildRuns(segments []store.Segment, opts RunOptions) [][]store.Segment {
 	for _, segment := range segments {
 		length := len([]rune(strings.TrimSpace(segment.Text)))
 		if len(current) > 0 {
-			prev := current[len(current)-1]
-			if opts.resolve(segment.Speaker) != opts.resolve(prev.Speaker) ||
-				len(current)+1 > opts.MaxSegments ||
+			if len(current)+1 > opts.MaxSegments ||
 				chars+length > opts.MaxChars {
 				runs = append(runs, current)
 				current = nil
@@ -184,16 +276,35 @@ func ComposeParagraphs(run []store.Segment, groups []Group, source, model string
 		if resolve != nil {
 			speaker = resolve(speaker)
 		}
+		for _, member := range members[1:] {
+			other := member.Speaker
+			if resolve != nil {
+				other = resolve(other)
+			}
+			if other != speaker {
+				speaker = ""
+				break
+			}
+		}
+		text := JoinTexts(members)
+		title, summary := "", ""
+		if !group.TopicExcluded && hasTopicText(text) {
+			title = topicTitle(group.Title, text)
+			summary = topicSummary(group.Summary, text)
+		}
 		paragraphs = append(paragraphs, Paragraph{
-			ID:         members[0].ID,
-			StartedAt:  members[0].StartedAt,
-			EndedAt:    members[len(members)-1].EndedAt,
-			Speaker:    speaker,
-			Text:       JoinTexts(members),
-			SegmentIDs: ids,
-			Source:     source,
-			Model:      model,
-			UpdatedAt:  now,
+			ID:            members[0].ID,
+			StartedAt:     members[0].StartedAt,
+			EndedAt:       members[len(members)-1].EndedAt,
+			Speaker:       speaker,
+			Text:          text,
+			Title:         title,
+			Summary:       summary,
+			TopicExcluded: group.TopicExcluded,
+			SegmentIDs:    ids,
+			Source:        source,
+			Model:         model,
+			UpdatedAt:     now,
 		})
 	}
 	return paragraphs
@@ -203,5 +314,5 @@ func FallbackGroups(n int) []Group {
 	if n <= 0 {
 		return nil
 	}
-	return []Group{{Start: 1, End: n}}
+	return []Group{{Start: 1, End: n, TopicExcluded: true}}
 }

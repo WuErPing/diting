@@ -34,6 +34,11 @@ func correctionBudget(text string) int {
 	return 1 + len([]rune(text))/10
 }
 
+// EditDistance reports the Levenshtein distance in runes between two strings.
+func EditDistance(a, b string) int {
+	return editDistanceWithin(a, b, len([]rune(a))+len([]rune(b)))
+}
+
 func editDistanceWithin(a, b string, limit int) int {
 	left, right := []rune(a), []rune(b)
 	if len(left) > len(right) {

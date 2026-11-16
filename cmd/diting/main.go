@@ -38,10 +38,14 @@ type config struct {
 	speakerModel     string
 	speakerThreshold float64
 	llmURL           string
+	llmAPIKey        string
 	llmModel         string
 	llmCorrect       bool
+	asrProvider      string
 	merge            bool
 	reparagraph      bool
+	recent           int
+	dryRun           bool
 	evalSpeakers     bool
 	exportTestset    bool
 	testsetPath      string
@@ -57,15 +61,22 @@ func main() {
 	flag.BoolVar(&cfg.retranscribe, "retranscribe", false, "re-run all saved records with the current models and exit")
 	flag.StringVar(&cfg.speakerModel, "speaker-model", "", "speaker embedding model (default: <models>/"+engine.SpeakerModelName+")")
 	flag.Float64Var(&cfg.speakerThreshold, "speaker-threshold", 0.45, "cosine threshold for speaker matching")
-	flag.StringVar(&cfg.llmURL, "llm-url", paragraph.DefaultBaseURL, "LM Studio OpenAI-compatible base URL (loopback only)")
-	flag.StringVar(&cfg.llmModel, "llm-model", paragraph.DefaultModel, "LM Studio model used to split paragraphs")
-	flag.BoolVar(&cfg.llmCorrect, "llm-correct", true, "use the LM Studio model to semantically correct paragraph text")
+	flag.StringVar(&cfg.llmURL, "llm-url", paragraph.DefaultBaseURL, "OpenAI-compatible model API base URL (remote APIs require HTTPS)")
+	flag.StringVar(&cfg.llmAPIKey, "llm-api-key", "", "model API key (default: DITING_LLM_API_KEY, MIMO_API_KEY, or OpenCode Xiaomi credentials)")
+	flag.StringVar(&cfg.llmModel, "llm-model", paragraph.DefaultModel, "model used to identify meeting topics")
+	flag.BoolVar(&cfg.llmCorrect, "llm-correct", true, "use the model to semantically correct paragraph text")
+	flag.StringVar(&cfg.asrProvider, "asr", engine.ASRProviderLocal, "final transcription provider: local or mimo")
 	flag.BoolVar(&cfg.merge, "merge", true, "merge consecutive same-speaker segments into paragraphs")
 	flag.BoolVar(&cfg.reparagraph, "reparagraph", false, "rebuild paragraphs from existing transcripts and exit")
+	flag.IntVar(&cfg.recent, "recent", 0, "with -reparagraph -dry-run, preview runs covering the most recent N segments")
+	flag.BoolVar(&cfg.dryRun, "dry-run", false, "with -reparagraph -recent N, print before/after without writing")
 	flag.BoolVar(&cfg.evalSpeakers, "eval-speakers", false, "evaluate speaker model against test set and exit")
 	flag.BoolVar(&cfg.exportTestset, "export-testset", false, "export annotated segments as speaker test set and exit")
 	flag.StringVar(&cfg.testsetPath, "testset", "", "test set JSONL path (default: <data>/testset.jsonl)")
 	flag.Parse()
+	if cfg.llmAPIKey == "" {
+		cfg.llmAPIKey = defaultLLMAPIKey()
+	}
 
 	if cfg.speakerModel == "" {
 		cfg.speakerModel = filepath.Join(cfg.models, engine.SpeakerModelName)
@@ -114,19 +125,25 @@ func run(cfg config) error {
 
 	var paragraphStore *paragraph.Store
 	var worker *paragraph.Worker
+	var recognizer *engine.Engine
 	var client *paragraph.Client
+	var settings server.SettingsDirectory
 	if cfg.merge {
 		paragraphStore, err = paragraph.Open(cfg.data)
 		if err != nil {
 			return err
 		}
-		client = paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, Model: cfg.llmModel})
+		client = paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, APIKey: cfg.llmAPIKey, Model: cfg.llmModel})
 		worker = paragraph.NewWorker(paragraph.WorkerOptions{
-			Store:     paragraphStore,
-			Segments:  segmentStore,
-			Grouper:   client,
-			Corrector: paragraphCorrector(cfg, client),
-			Model:     cfg.llmModel,
+			Store:      paragraphStore,
+			Segments:   segmentStore,
+			Grouper:    client,
+			Corrector:  client,
+			Summarizer: client,
+			Retranscribe: func(ctx context.Context, selected []store.Segment) ([]store.Segment, int, error) {
+				return engine.RetranscribeSegments(ctx, segmentStore, recognizer, selected)
+			},
+			Model: cfg.llmModel,
 		})
 		defer worker.Close()
 	}
@@ -135,11 +152,18 @@ func run(cfg config) error {
 	if worker != nil {
 		options.OnSegment = worker.Notify
 	}
-	recognizer, err := engine.New(modelPaths(cfg), segmentStore, options)
+	recognizer, err = engine.New(modelPaths(cfg), segmentStore, options)
 	if err != nil {
 		return err
 	}
 	defer recognizer.Close()
+	if cfg.merge {
+		settings, err = paragraph.OpenSettings(filepath.Join(cfg.data, "settings.json"), client, worker,
+			paragraph.Snapshot{Model: cfg.llmModel, Correct: cfg.llmCorrect, ASR: cfg.asrProvider}, log.Printf, recognizer)
+		if err != nil {
+			return err
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -147,7 +171,7 @@ func run(cfg config) error {
 	if worker != nil {
 		reload = worker.Reload
 	}
-	console := server.New(ctx, recognizer, segmentStore, paragraphStore, cfg.merge, lex, reload, web.Files)
+	console := server.New(ctx, recognizer, segmentStore, paragraphStore, cfg.merge, lex, settings, reload, web.Files)
 	defer console.Close()
 
 	if worker != nil {
@@ -156,10 +180,10 @@ func run(cfg config) error {
 		worker.Start(ctx)
 		go func() {
 			if err := client.Check(ctx); err != nil {
-				log.Printf("LM Studio 暂不可用，段落将先按整段拼接: %v", err)
+				log.Printf("模型服务暂不可用，文稿将先保留整段且暂不生成主题: %v", err)
 				return
 			}
-			log.Printf("段落合并模型: %s", cfg.llmModel)
+			log.Printf("会议议题模型: %s", settings.Snapshot().Model)
 		}()
 	}
 
@@ -208,6 +232,68 @@ func run(cfg config) error {
 	return nil
 }
 
+func defaultLLMAPIKey() string {
+	if key := os.Getenv("DITING_LLM_API_KEY"); key != "" {
+		return key
+	}
+	if key := os.Getenv("MIMO_API_KEY"); key != "" {
+		return key
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	if key := readAPIKeyFile(filepath.Join(home, "code", "keys", "xiaomi")); key != "" {
+		return key
+	}
+	if key := readOpenCodeConfigAPIKey(filepath.Join(home, ".config", "opencode", "opencode.json")); key != "" {
+		return key
+	}
+	return readOpenCodeAPIKey(filepath.Join(home, ".local", "share", "opencode", "auth.json"))
+}
+
+func readAPIKeyFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func readOpenCodeConfigAPIKey(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var config struct {
+		Provider struct {
+			MiMo struct {
+				APIKey string `json:"apiKey"`
+			} `json:"mimo"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(config.Provider.MiMo.APIKey)
+}
+
+func readOpenCodeAPIKey(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var auth struct {
+		Xiaomi struct {
+			Key string `json:"key"`
+		} `json:"xiaomi"`
+	}
+	if err := json.Unmarshal(data, &auth); err != nil {
+		return ""
+	}
+	return auth.Xiaomi.Key
+}
+
 func modelPaths(cfg config) engine.ModelPaths {
 	paths := engine.DefaultModelPaths(cfg.models)
 	paths.Speaker = cfg.speakerModel
@@ -219,6 +305,11 @@ func engineOptions(cfg config, lex *lexicon.Lexicon) engine.Options {
 		SpeakerRegistry:  filepath.Join(cfg.data, "speakers.json"),
 		SpeakerThreshold: float32(cfg.speakerThreshold),
 		Lexicon:          lex,
+		ASRProvider:      cfg.asrProvider,
+		CloudASR: engine.NewMiMoASR(engine.MiMoASRConfig{
+			BaseURL: cfg.llmURL,
+			APIKey:  cfg.llmAPIKey,
+		}),
 	}
 }
 
@@ -325,7 +416,7 @@ func retranscribe(cfg config) error {
 	if err != nil {
 		return err
 	}
-	client := paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, Model: cfg.llmModel})
+	client := paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, APIKey: cfg.llmAPIKey, Model: cfg.llmModel})
 	rebuildStats, err := paragraph.Rebuild(context.Background(), paragraphStore, segments, client, paragraphCorrector(cfg, client),
 		cfg.llmModel, paragraph.RunOptions{}, nil, recognizer.CanonicalSpeaker, progressPrinter("段落重建"))
 	if err != nil {
@@ -376,7 +467,25 @@ func reparagraph(cfg config) error {
 		}
 	}
 
-	client := paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, Model: cfg.llmModel})
+	client := paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, APIKey: cfg.llmAPIKey, Model: cfg.llmModel})
+
+	if cfg.recent > 0 && !cfg.dryRun {
+		return fmt.Errorf("-recent 仅用于 -dry-run 预览；要写入请去掉 -recent（全量重建段落）")
+	}
+
+	if cfg.dryRun {
+		if cfg.recent <= 0 {
+			return fmt.Errorf("-dry-run 需要 -recent N（N>0）")
+		}
+		comparisons, err := paragraph.CompareRecent(context.Background(), paragraphStore, segments, client,
+			paragraphCorrector(cfg, client), cfg.llmModel, paragraph.RunOptions{}, nil, resolve, cfg.recent)
+		if err != nil {
+			return err
+		}
+		printComparisons(comparisons, cfg.llmModel)
+		return nil
+	}
+
 	stats, err := paragraph.Rebuild(context.Background(), paragraphStore, segments, client, paragraphCorrector(cfg, client),
 		cfg.llmModel, paragraph.RunOptions{}, nil, resolve, progressPrinter("段落重建"))
 	if err != nil {
@@ -384,6 +493,27 @@ func reparagraph(cfg config) error {
 	}
 	printRebuildStats(stats)
 	return nil
+}
+
+func printComparisons(comparisons []paragraph.Comparison, model string) {
+	if len(comparisons) == 0 {
+		fmt.Println("没有可比较的段落")
+		return
+	}
+	fmt.Printf("模型 %s 试运行（不写入）：共 %d 段\n\n", model, len(comparisons))
+	changed := 0
+	for i, c := range comparisons {
+		distance := paragraph.EditDistance(c.Before, c.After)
+		if distance > 0 {
+			changed++
+		}
+		fmt.Printf("[%d] 说话人 %s  %s  差异 %d 字\n", i+1, c.Speaker, c.StartedAt.Format("2006-01-02 15:04"), distance)
+		fmt.Printf("  ASR原文: %s\n", c.Raw)
+		fmt.Printf("  现行   : %s\n", c.Before)
+		fmt.Printf("  新模型 : %s\n\n", c.After)
+	}
+	fmt.Printf("合计 %d/%d 段有变更（新模型 vs 现行）。\n", changed, len(comparisons))
+	fmt.Println("提示：现行与新模型的差异仅来自 LLM 补正；若 ASR原文 本身有误，切换模型无法修正。")
 }
 
 func paragraphCorrector(cfg config, client *paragraph.Client) paragraph.Corrector {

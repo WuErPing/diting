@@ -36,6 +36,13 @@ type History interface {
 	Rewrite([]store.Segment) error
 }
 
+type AudioHistory interface {
+	History
+	Audio(id string) (string, error)
+}
+
+var ErrAudioUnavailable = errors.New("录音不可用")
+
 type Stats struct {
 	Total        int
 	Updated      int
@@ -105,6 +112,55 @@ func RetranscribeAll(history History, processor Processor) (Stats, error) {
 		return stats, err
 	}
 	return stats, nil
+}
+
+// RetranscribeSegments re-recognizes one paragraph's recordings and atomically
+// rewrites the transcript log. A missing or unreadable recording aborts the
+// whole operation before any text is changed.
+func RetranscribeSegments(ctx context.Context, history AudioHistory, processor Processor, selected []store.Segment) ([]store.Segment, int, error) {
+	segments, err := history.All()
+	if err != nil {
+		return nil, 0, err
+	}
+	byID := make(map[string]int, len(segments))
+	for i := range segments {
+		byID[segments[i].ID] = i
+	}
+	updated := make([]store.Segment, len(selected))
+	changed := 0
+	for i, requested := range selected {
+		if err := ctx.Err(); err != nil {
+			return nil, 0, err
+		}
+		index, ok := byID[requested.ID]
+		if !ok {
+			return nil, 0, fmt.Errorf("%w: %s", ErrAudioUnavailable, requested.ID)
+		}
+		segment := segments[index]
+		path, err := history.Audio(segment.ID)
+		if err != nil {
+			return nil, 0, fmt.Errorf("%w: %s", ErrAudioUnavailable, segment.ID)
+		}
+		samples, err := LoadAudioSamples(path)
+		if err != nil {
+			return nil, 0, fmt.Errorf("%w: %s: %v", ErrAudioUnavailable, segment.ID, err)
+		}
+		text := strings.TrimSpace(processor.RefineWAV(samples))
+		if text != "" {
+			segment.Text = text
+		}
+		updated[i] = segment
+		if segment.Text != segments[index].Text {
+			segments[index].Text = segment.Text
+			changed++
+		}
+	}
+	if changed > 0 {
+		if err := history.Rewrite(segments); err != nil {
+			return nil, 0, err
+		}
+	}
+	return updated, changed, nil
 }
 
 func resolveAudioPath(root, relative string) (string, error) {

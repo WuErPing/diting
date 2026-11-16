@@ -49,10 +49,17 @@ func (s *Store) SaveMany(paragraphs []Paragraph) error {
 
 	incomingIDs := make(map[string]struct{}, len(paragraphs))
 	incomingSegments := make(map[string]struct{})
-	for _, paragraph := range paragraphs {
+	existingByID := make(map[string]Paragraph, len(s.list))
+	for _, existing := range s.list {
+		existingByID[existing.ID] = existing
+	}
+	for i, paragraph := range paragraphs {
 		incomingIDs[paragraph.ID] = struct{}{}
 		for _, id := range paragraph.SegmentIDs {
 			incomingSegments[id] = struct{}{}
+		}
+		if existing, ok := existingByID[paragraph.ID]; ok && paragraph.Digest == "" && existing.Text == paragraph.Text {
+			paragraphs[i].Digest = existing.Digest
 		}
 	}
 

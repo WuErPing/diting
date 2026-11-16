@@ -119,6 +119,7 @@ func TestBuildMarkdownRendersParagraphs(t *testing.T) {
 		EndedAt:    segments[1].EndedAt,
 		Speaker:    "说话人1",
 		Text:       "第一句。第二句。",
+		Digest:     "手动生成的段落总结。",
 		SegmentIDs: []string{"a", "b"},
 		Source:     paragraph.SourceLLM,
 	}}
@@ -126,6 +127,9 @@ func TestBuildMarkdownRendersParagraphs(t *testing.T) {
 	document := buildMarkdown(segments, paragraphs, 3, 0, now)
 	if !strings.Contains(document, "- **14:00:00–14:00:09** · 说话人1 · 第一句。第二句。") {
 		t.Fatalf("missing merged bullet:\n%s", document)
+	}
+	if !strings.Contains(document, "> 总结：手动生成的段落总结。") {
+		t.Fatalf("manual summary missing:\n%s", document)
 	}
 	if strings.Contains(document, "- **14:00:05**") {
 		t.Fatalf("covered segment rendered separately:\n%s", document)

@@ -2,7 +2,9 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,6 +30,15 @@ func (h *fakeHistory) All() ([]store.Segment, error) {
 func (h *fakeHistory) Rewrite(segments []store.Segment) error {
 	h.rewritten = append([]store.Segment(nil), segments...)
 	return nil
+}
+
+func (h *fakeHistory) Audio(id string) (string, error) {
+	for _, segment := range h.segments {
+		if segment.ID == id {
+			return filepath.Join(h.root, filepath.FromSlash(segment.AudioPath)), nil
+		}
+	}
+	return "", os.ErrNotExist
 }
 
 type fakeProcessor struct {
@@ -209,6 +220,54 @@ func TestLoadAudioSamplesUsesCanonicalDecoder(t *testing.T) {
 	}
 	if len(samples) != 2 {
 		t.Fatalf("samples = %d, want 2", len(samples))
+	}
+}
+
+func TestRetranscribeSegmentsUpdatesOnlySelectedParagraph(t *testing.T) {
+	original := readWave
+	defer func() { readWave = original }()
+	readWave = func(string) *sherpa.Wave {
+		return &sherpa.Wave{Samples: []float32{0.1}, SampleRate: SampleRate}
+	}
+	history := &fakeHistory{root: t.TempDir(), segments: []store.Segment{
+		{ID: "a", Text: "旧一", Speaker: "说话人1", AudioPath: "audio/a.wav"},
+		{ID: "b", Text: "旧二", Speaker: "说话人2", AudioPath: "audio/b.wav"},
+		{ID: "c", Text: "保留三", Speaker: "说话人3", AudioPath: "audio/c.wav"},
+	}}
+	updated, changed, err := RetranscribeSegments(context.Background(), history, fakeProcessor{text: "新文本"}, history.segments[:2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed != 2 || len(updated) != 2 || updated[0].Text != "新文本" || updated[1].Text != "新文本" {
+		t.Fatalf("updated = %+v, changed = %d", updated, changed)
+	}
+	if len(history.rewritten) != 3 || history.rewritten[2].Text != "保留三" {
+		t.Fatalf("rewritten = %+v", history.rewritten)
+	}
+	if history.rewritten[0].Speaker != "说话人1" || history.rewritten[1].Speaker != "说话人2" {
+		t.Fatalf("speakers changed: %+v", history.rewritten)
+	}
+}
+
+func TestRetranscribeSegmentsFailureLeavesAllTextUnchanged(t *testing.T) {
+	original := readWave
+	defer func() { readWave = original }()
+	readWave = func(path string) *sherpa.Wave {
+		if filepath.Base(path) == "b.wav" {
+			return nil
+		}
+		return &sherpa.Wave{Samples: []float32{0.1}, SampleRate: SampleRate}
+	}
+	history := &fakeHistory{root: t.TempDir(), segments: []store.Segment{
+		{ID: "a", Text: "旧一", AudioPath: "audio/a.wav"},
+		{ID: "b", Text: "旧二", AudioPath: "audio/b.wav"},
+	}}
+	_, _, err := RetranscribeSegments(context.Background(), history, fakeProcessor{text: "新文本"}, history.segments)
+	if !errors.Is(err, ErrAudioUnavailable) {
+		t.Fatalf("error = %v", err)
+	}
+	if history.rewritten != nil {
+		t.Fatalf("failed paragraph was rewritten: %+v", history.rewritten)
 	}
 }
 

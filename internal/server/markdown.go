@@ -126,6 +126,9 @@ func writeParagraph(b *strings.Builder, p *paragraph.Paragraph) {
 		text = "（未识别出文字）"
 	}
 	b.WriteString(" · " + escapeMarkdown(text) + "\n")
+	if digest := strings.TrimSpace(p.Digest); digest != "" {
+		b.WriteString("> 总结：" + escapeMarkdown(digest) + "\n")
+	}
 }
 
 func writeSegment(b *strings.Builder, segment *store.Segment) {

@@ -1,13 +1,13 @@
 # 谛听
 
-本机语音记录控制台。Go 单进程完成麦克风采集、Silero VAD 人声检测、流式语音识别、声纹说话人标注、按天分目录的压缩分段录音、JSONL 文本持久化，并通过本机 LM Studio 异步把同一说话人的连续语句合并为更长的语义段落，最终在内嵌 Web 页面实时展示与导出 Markdown 文稿。
+本机语音记录控制台。Go 单进程完成麦克风采集、Silero VAD 人声检测、流式语音识别、声纹说话人标注、按天分目录的压缩分段录音、JSONL 文本持久化；最终识别可选本地 SenseVoice 或小米 MiMo ASR，并通过可配置的 OpenAI 兼容模型 API 异步识别跨说话人的会议议题，最终在内嵌 Web 页面实时展示与导出 Markdown 文稿。
 
 ## 功能
 
 - 只在检测到人声时保存录音，附带约 500ms 前置音频，并按 VAD 绝对采样位置去除重叠。
 - 说话停顿不足约 1 秒时继续合并，静音达到约 1 秒后才结束当前分段。
 - 连续讲话每约 30 秒强制分段，避免 VAD 缓冲持续增长。
-- 说话过程中通过 SSE 推送 4 路 beam search 的流式临时文本，语句结束后使用本地 SenseVoice 对完整录音精校并写入带标点的最终记录。对不超过 30 字、没有内部标点的中文短句，若两个独立流式模型正文一致且与精校最多有两处编辑差异，则采用一致的流式正文并保留精校标点；辅助模型不可用或结果不一致时，仅在一处编辑差异时采用主流式结果，其余情况始终保留精校结果。
+- 说话过程中通过 SSE 推送 4 路 beam search 的本地流式临时文本。语句结束后默认使用本地 SenseVoice 对完整录音精校；也可在“模型与识别”设置中选择 `mimo-v2.5-asr`，把该段 WAV 上传到 Token Plan 端点生成最终文本，云端失败时自动回退本地识别。本地模式对不超过 30 字、没有内部标点的中文短句，若两个独立流式模型正文一致且与精校最多有两处编辑差异，则采用一致的流式正文并保留精校标点；辅助模型不可用或结果不一致时，仅在一处编辑差异时采用主流式结果，其余情况始终保留精校结果。
 - 使用 3D-Speaker CAM++ 声纹模型为每个片段标注主导说话人（说话人1、说话人2…），声纹中心持久化到 `data/speakers.json`，跨重启沿用编号。
 - 说话人保留稳定标签 `说话人N`，可在控制台点击标签设置人名别名（如”章总”）；别名只影响控制台、SSE 与 Markdown 显示，不改写历史记录。
 - 支持将多个说话人标签合并为同一人（`mergedInto` 链）；合并后段落内容自动拼接，显示名统一为根标签的别名。设置相同别名时自动触发合并。合并文稿中的说话人名可点击标注。
@@ -16,18 +16,18 @@
 - 录音按本地日期保存在 `data/audio/YYYYMMDD/`；左侧日历按天展示归档，格子颜色深浅对应当天录音体积，可把整天录音目录移到废纸篓并删除对应转写。
 - 支持场景术语映射：在控制台维护 `错词=正词`（如“张总=章总”），只作用于之后生成的最终文本；改词表不会静默改写历史，`-retranscribe` 时才会重新应用。
 - 支持 `-retranscribe` 用当前模型全量重跑历史录音，修复旧版本产生的文本并重算说话人标签；音频文件不会被删除或改写，WAV 与 M4A 都可解码。
-- 可选接入本机 LM Studio，异步判断同一说话人连续语句的语义段落边界；模型只决定分段，文本逐字拼接，不润色、不改写。每收到一条新的最终语句就立即重判当前段落，不需要等待空闲；启动后后台自动回填全部历史，录音、识别和 SSE 不被阻塞。
-- 段落层写入派生文件 `data/paragraphs.jsonl`，只用于 Markdown 预览与导出；左侧历史仍逐条展示，每条录音仍可单独回放。同一说话人只有换人、单 run 达到 20 段或 3000 字才切分。模型不可用时先按整 run 拼接，后续新语句、下次启动或 `-reparagraph` 会自动重试。
+- 默认接入小米 `mimo-v2.6-flash`，也可配置其他 OpenAI 兼容 API 或本机 LM Studio。模型跨说话人判断完整会议议题，把问答、讨论、决策和行动项归为同一主题，并生成具体名称与简明介绍；寒暄、闲聊、语气词和无信息过渡不进入主题索引。正文逐字拼接，不润色、不改写。每收到一条新的最终语句就立即重判当前段落，不需要等待空闲；启动后后台自动回填全部历史，录音、识别和 SSE 不被阻塞。
+- 段落层写入派生文件 `data/paragraphs.jsonl`，用于 Markdown 预览、主题索引与导出；独立声音记录页逐条展示，每条录音仍可单独回放。说话人变化不会强制切分，单 run 达到 20 段或 3000 字才切分。模型不可用时先按整 run 拼接并暂不生成新主题，后续新语句、下次启动或 `-reparagraph` 会自动重试。
 - 控制台启停麦克风、查看历史、回放和下载录音，查看按天归档并删除整天数据。
-- 右侧实时合并转录为 Markdown 文稿预览，正在识别的临时文本也会即时跟随；可隐藏，并支持下载完整 `.md` 文件。
-- 所有识别和存储都在本机，不调用云 ASR，也不上传音频或文本。
+- 首页中间实时合并转录为 Markdown 文稿预览，正在识别的临时文本也会即时跟随；可隐藏，并支持下载完整 `.md` 文件。“按主题分段”可用当前模型重新划分最近 500 条记录；每个派生段落都有“语义修正”“ASR”和“总结”按钮：语义修正只改派生文本；ASR 用当前选择的本地 / MiMo 模型重新识别该段全部录音，并同步更新原始逐句转写与该段落，任一录音不可用时整段不改；总结调用当前段落模型生成独立摘要并显示在正文下方，不改写原文或主题简介。右侧主题可点击跳转到对应文稿段落。最右侧按时间列出有讨论价值的议题名称与简明介绍，声音记录通过独立页面查看。
+- 默认语音识别和存储都在本机，不上传音频。只有明确选择 MiMo ASR 后才上传最终 WAV 分段；议题分析和语义修正会把转写文本发送到所配置的模型 API，默认使用小米 MiMo，可改回本机 LM Studio。
 - 服务重启后恢复最近历史；磁盘上的 JSONL 和音频不会被启动过程清空。
 
 ## 环境
 
 - macOS Apple Silicon（当前验证环境）。
 - Go 1.25+，CGO 开启。
-- 首次运行需要下载官方模型；语义段落合并需要本机 LM Studio（可选，模型不可用时自动降级为整段拼接）。
+- 首次运行需要下载官方识别模型；议题分析默认使用小米 MiMo API，也可配置本机 LM Studio（模型不可用时自动降级为整段拼接）。
 - 压缩录音依赖 macOS 自带的 `/usr/bin/afconvert`；缺失时自动回退 WAV，不影响功能。
 
 ## 启动
@@ -63,9 +63,12 @@ go build -o bin/diting ./cmd/diting
 -speaker-threshold 0.45 说话人匹配的余弦阈值，调高更易拆分，调低更易合并
 -verify-wav FILE        用 WAV 验证真实模型识别后退出
 -retranscribe           用当前模型全量重跑历史记录后退出
--llm-url http://127.0.0.1:1234/v1  LM Studio OpenAI 兼容地址，只允许回环地址
--llm-model qwen3.6-35b-a3b-splash  段落切分模型
--merge=true             启用异步段落合并；false 时 Markdown 退回逐条格式
+-llm-url https://token-plan-cn.xiaomimimo.com/v1  OpenAI 兼容模型 API；远程地址必须用 HTTPS
+-llm-api-key KEY        模型 API 凭证；默认读取环境变量、~/code/keys/xiaomi 或 OpenCode 的 MiMo 凭证
+-llm-model mimo-v2.6-flash  会议议题切分模型
+-llm-correct=true       使用模型修正派生段落；原始逐句转写不变
+-asr local              最终语音识别：local 或 mimo（mimo-v2.5-asr）
+-merge=true             启用异步议题切分；false 时 Markdown 退回逐条格式
 -reparagraph            用现有转写全量重建段落层后退出
 -eval-speakers          用测试集评估声纹模型后退出
 -export-testset         从已标注录音导出测试集后退出
@@ -79,17 +82,21 @@ go build -o bin/diting ./cmd/diting
 ```text
 DITING_AUDIO_FORMAT=wav|m4a   强制新录音格式，默认有 afconvert 时用 m4a
 DITING_TRASH_DIR=DIR          按天删除时使用的废纸篓目录，默认 ~/.Trash
+DITING_LLM_API_KEY=KEY        模型 API 凭证，优先级最高
+MIMO_API_KEY=KEY              小米模型 API 凭证，优先级次之
 ```
 
-段落合并要求 LM Studio 在 `http://127.0.0.1:1234` 提供 OpenAI 兼容接口并已加载指定模型。启动时只做一次健康检查，不可达不会阻止启动；为避免转写文本离开本机，`-llm-url` 只接受 `127.0.0.1`、`localhost` 或 `::1`。
+议题分析默认调用 Token Plan 端点 `https://token-plan-cn.xiaomimimo.com/v1`，模型为 `mimo-v2.6-flash`。未显式传入 `-llm-api-key` 时，依次读取 `DITING_LLM_API_KEY`、`MIMO_API_KEY`、`~/code/keys/xiaomi`、`~/.config/opencode/opencode.json` 的 `provider.mimo.apiKey` 和旧版 `~/.local/share/opencode/auth.json` 中已有的 Xiaomi 凭证；凭证只用于请求头，不写入 `data/settings.json`、页面或日志。请求同时发送小米要求的 `api-key` 头和通用的 `Authorization: Bearer` 头。
+
+启动时只做一次文本模型健康检查，不可达不会阻止启动。远程模型必须使用 HTTPS；本机 LM Studio 可用 `-llm-url http://127.0.0.1:1234/v1 -llm-model <模型ID>`，无需 API Key。使用远程议题模型意味着转写文本会发送给对应服务商。MiMo ASR 使用同一端点和凭证，通过 `/chat/completions` 的 `input_audio` 上传 Base64 WAV；只有 `asr=mimo` 时上传，默认 `local` 不上传。
 
 ## 控制台
 
 页面分为三个区域：
 
 - 左侧：运行状态、麦克风启停、“全部归档”统计（录音文件数、占用空间、转写文字数），以及按天日历。日历格子的颜色深浅按当天录音体积取对数分级；点击有数据的日期可查看当天段数、字数、录音数和大小，并把整天数据移到废纸篓。
-- 中间：实时转录。讲话过程中显示青灰色临时文本，语句结束后替换为带标点的最终段落，并附说话人标签。点击说话人标签可设置人名或合并到其他说话人；顶部”术语表”可维护场景替换规则。
-- 右侧：Markdown 合并文稿预览。同一说话人的连续语句会异步合并为带起止时间的段落，默认展示最近 500 条记录并滚动到最新一条，面板高度随窗口自适应；顶部可下载完整 `.md` 或隐藏面板。隐藏状态保存在浏览器本地存储中，刷新后保持；窄屏时预览自动移到正文下方。合并文稿中的说话人名可点击直接标注。
+- 中间：顶部保留实时转录，下方为 Markdown 合并文稿。讲话过程中显示青灰色临时文本；跨说话人的连续发言异步合并为带起止时间的议题段落，默认展示最近 500 条记录。顶部可进入独立声音记录页、维护术语表、按主题重新分段、下载完整 `.md` 或隐藏文稿。自动分段只重建最近记录涉及的派生段落，不改写原始转写；模型不可用时保留整段拼接。合并文稿中的单人说话人名可点击直接标注，多人议题保留各句原文并显示为无单一说话人。
+- 右侧：主题分类按文稿顺序列出每段的时间、议题名称和简明介绍，并随新记录、分段和修正同步刷新；模型只收录包含实质观点、问题、事实、方案、决策、分歧、任务或行动项的段落，寒暄、闲聊、重复确认、空白、纯标点、纯语气词和笑声不生成主题。独立声音记录页保留逐句历史、分页、录音播放下载和说话人标注；窄屏时文稿和主题索引依次移到正文下方。
 
 ## 说话人标注
 
@@ -210,8 +217,12 @@ audioPath   相对 data 目录的音频路径（.m4a 或 .wav）
 id          段落 ID，取首段 segment ID，重新切分后保持稳定
 startedAt   段落开始时间
 endedAt     段落结束时间
-speaker     段落主导说话人
+speaker     单一段落说话人；多人议题省略
 text        段内原始转写逐字拼接，不润色
+title       议题名称；历史段落为空时按原文生成回退标题
+summary     议题简明介绍；历史段落为空时按原文生成回退摘要
+digest      点击“总结”生成的独立段落摘要，显示在正文下方
+topicExcluded 模型判定为低信息内容时为 true，不进入主题索引
 segmentIds  成员分段 ID，按时间顺序
 source      llm / single / fallback
 model       产出该段落的模型
@@ -238,6 +249,9 @@ GET /api/status
 GET /api/stats               全量统计：录音数、总大小、转写字数
 GET /api/days                按天统计：段数、字数、录音数、占用
 DELETE /api/days/{date}      删除某天转写，并把 audio/YYYYMMDD 移到废纸篓
+GET /api/settings            当前段落模型、语义修正与 ASR 选择
+PUT /api/settings            {"model":"mimo-v2.6-flash","correct":false,"asr":"local|mimo"}
+GET /api/models              当前 OpenAI 兼容端点的模型列表
 GET /api/speakers            说话人稳定标签、显示名与计数
 PATCH /api/speakers/{label}  {"alias":"章总"}；空串清除别名
 PUT /api/speakers/{label}/merge  {"target":"说话人1"}；空串取消合并
@@ -247,6 +261,12 @@ PUT /api/capture             {"state":"RUNNING"} 或 {"state":"STOPPED"}
 GET /api/segments?limit=50   可选 before=RFC3339Nano 向前翻页；limit 范围 1–100
 GET /api/segments/{id}/audio
 GET /api/markdown?limit=500  Markdown 合并文稿；download=1 导出完整文件
+GET /api/paragraphs?limit=500 当前预览段落的 ID、起止时间、主题名称与简介
+POST /api/paragraphs/split {"limit":500}；按主题重新划分最近窗口涉及的完整 run
+POST /api/paragraphs/correct {"limit":500}；手动修正最近窗口内的派生段落
+POST /api/paragraphs/{id}/correct 只手动修正指定段落
+POST /api/paragraphs/{id}/asr 用当前 ASR 重新识别指定段落的全部录音
+POST /api/paragraphs/{id}/summarize 用当前段落模型生成独立摘要
 GET /api/events              SSE: status / interim / segment / paragraph / archive / error
 ```
 
@@ -267,7 +287,7 @@ go test ./...
 go build -o bin/diting ./cmd/diting
 ```
 
-测试覆盖声纹注册表（匹配/新建/持久化、短片段抑制更新、多窗口一致性、低质量与歧义更新抑制、不确定区间复用、质心权重封顶、人名别名校验、合并链与取消合并）、声纹评估（测试集加载、M4A 解码、EER 计算、准确率、分数分布、阈值推荐）、JSONL 存储（顺序、备份、重写、锁竞争、归档统计、按天删除与废纸篓、AAC 编码与权限、WAV 回退、超出内存窗口的音频查找）、全量重跑（保留旧文本、缺失音频、说话人重算、压缩音频解码与 WAVE_FORMAT_EXTENSIBLE 头规范化）、Markdown 生成与接口参数校验、按天/说话人/术语表接口、段落切分（换人/上限、忽略停顿、逐字拼接、边界校验、原子快照、LLM 请求与解析、异步 worker 的逐句重判、回填、删除后重载、降级、冷却与关闭取消）、术语表（最长匹配、不级联、校验、并发替换）。
+测试覆盖声纹注册表（匹配/新建/持久化、短片段抑制更新、多窗口一致性、低质量与歧义更新抑制、不确定区间复用、质心权重封顶、人名别名校验、合并链与取消合并）、声纹评估（测试集加载、M4A 解码、EER 计算、准确率、分数分布、阈值推荐）、JSONL 存储（顺序、备份、重写、锁竞争、归档统计、按天删除与废纸篓、AAC 编码与权限、WAV 回退、超出内存窗口的音频查找）、全量重跑（保留旧文本、缺失音频、说话人重算、压缩音频解码与 WAVE_FORMAT_EXTENSIBLE 头规范化）、Markdown 生成与接口参数校验、按天/说话人/术语表接口、议题切分（跨说话人、低信息过滤、上限、忽略停顿、逐字拼接、边界校验、原子快照、API 凭证与 LLM 请求解析、异步 worker 的逐句重判、回填、删除后重载、降级、冷却与关闭取消）、术语表（最长匹配、不级联、校验、并发替换）。
 
 模型下载后，可用模型目录中的示例 WAV 验证实际推理。该命令会通过完整引擎路径在 `data` 写入真实记录（默认按新格式生成 `.m4a`，并应用当前术语表），并输出整段精校对照、最终文本和 interim/final 事件数量：
 
@@ -290,7 +310,7 @@ go build -o bin/diting ./cmd/diting
 ./bin/diting -reparagraph
 ```
 
-该命令读取现有 `transcripts.jsonl`，按当前模型重新生成 `paragraphs.jsonl` 后退出；服务运行期间会因数据锁被拒绝，请先停止服务。LM Studio 不可达时会快速回退为整段拼接。该命令不会重新应用术语表。
+该命令读取现有 `transcripts.jsonl`，按当前模型重新生成 `paragraphs.jsonl` 后退出；服务运行期间会因数据锁被拒绝，请先停止服务。模型 API 不可达时会快速回退为整段拼接，并暂不生成新主题。该命令不会重新应用术语表。
 
 ## 常驻运行说明
 
@@ -303,7 +323,7 @@ cmd/diting/          命令行入口、参数解析、verify/retranscribe/repara
 internal/audio/      麦克风采集
 internal/engine/     VAD、流式识别、SenseVoice 精校、分段会话、声纹推理、全量重跑
 internal/speaker/    声纹注册表（余弦质心 + 人名别名 + 合并链 + JSON 持久化）、评估（EER / 准确率 / 阈值推荐）
-internal/paragraph/  段落切分规则、原子快照、LM Studio 客户端与异步 worker
+internal/paragraph/  会议议题切分、价值过滤、原子快照、OpenAI 兼容客户端与异步 worker
 internal/lexicon/    场景术语表（原子 JSON 持久化 + 单趟最长匹配）
 internal/store/      JSONL 存储、音频编码（AAC/WAV）、按天归档、废纸篓、单进程锁
 internal/server/     回环 HTTP API、SSE、Markdown 文稿生成

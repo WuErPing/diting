@@ -45,7 +45,7 @@
             <div><dt>存入</dt><dd><span id="segmentCount">0</span> 段</dd></div>
             <div><dt>丢帧</dt><dd><span id="droppedChunks">0</span> 块</dd></div>
           </dl>
-          <p class="technical-note">16 kHz&nbsp;&nbsp;·&nbsp;&nbsp;MONO&nbsp;&nbsp;·&nbsp;&nbsp;ON DEVICE</p>
+          <p class="technical-note" id="technicalNote">16 kHz&nbsp;&nbsp;·&nbsp;&nbsp;MONO&nbsp;&nbsp;·&nbsp;&nbsp;ON DEVICE</p>
         </section>
 
         <section class="archive-panel" aria-labelledby="archiveTitle">
@@ -81,7 +81,7 @@
 
         <section class="privacy-panel" aria-labelledby="privacyTitle">
           <h2 id="privacyTitle">声音不出本机</h2>
-          <p>检测、识别和保存都在这台电脑上完成。临时文字会随识别变化，语句结束后才写入记录。</p>
+          <p id="privacyText">语音识别和音频保存都在本机，不上传音频。议题分析会把转写文本发送到所配置的模型 API（默认小米 MiMo）。</p>
         </section>
       </aside>
 
@@ -92,9 +92,10 @@
             <h2 id="liveTitle">此刻</h2>
           </div>
           <div class="transcript-actions">
+            <button class="text-button" id="settingsButton" type="button" hidden>模型</button>
             <button class="text-button" id="lexiconButton" type="button">术语表</button>
+            <a class="text-button" href="/records.html">声音记录</a>
             <button class="text-button" id="showPreviewButton" type="button" hidden>显示文稿</button>
-            <button class="text-button" id="refreshButton" type="button">刷新记录</button>
           </div>
         </div>
 
@@ -104,37 +105,37 @@
           <span class="live-time" id="liveTime"></span>
         </div>
 
-        <div class="history-header">
-          <h2>声音记录</h2>
-          <span>最新在前</span>
-        </div>
-        <div class="empty-state" id="emptyState">
-          <p>还没有人声记录</p>
-          <span>开始聆听并说几句话，完成的语句会出现在这里。</span>
-        </div>
-        <ol class="timeline" id="segmentList"></ol>
-        <button class="load-more" id="loadMoreButton" type="button" hidden>查看更早记录</button>
+        <section class="preview-panel" id="previewPanel" aria-labelledby="previewTitle">
+          <div class="preview-header">
+            <div>
+              <p class="eyebrow">MARKDOWN</p>
+              <h2 id="previewTitle">合并文稿</h2>
+            </div>
+            <div class="preview-actions">
+              <button class="text-button" id="splitParagraphsButton" type="button" title="使用当前模型按会议议题重新划分最近 500 条记录，原始转写不变" hidden>按主题分段</button>
+              <a class="text-button" id="markdownDownload" href="/api/markdown?download=1" download>下载 .md</a>
+              <button class="icon-button" id="hidePreviewButton" type="button" aria-label="隐藏合并文稿预览" title="隐藏预览">×</button>
+            </div>
+          </div>
+          <p class="preview-note" id="previewNote" role="status">最近 500 条 · 模型议题</p>
+          <div class="markdown-scroll" id="markdownScroll">
+            <article class="markdown-body" id="markdownPreview"></article>
+            <div class="markdown-live" id="markdownLive" hidden>
+              <span class="markdown-live-label">此刻</span>
+              <p id="markdownLiveText"></p>
+            </div>
+          </div>
+        </section>
       </section>
 
-      <aside class="preview-panel" id="previewPanel" aria-labelledby="previewTitle">
-        <div class="preview-header">
-          <div>
-            <p class="eyebrow">MARKDOWN</p>
-            <h2 id="previewTitle">合并文稿</h2>
-          </div>
-          <div class="preview-actions">
-            <a class="text-button" id="markdownDownload" href="/api/markdown?download=1" download>下载 .md</a>
-            <button class="icon-button" id="hidePreviewButton" type="button" aria-label="隐藏合并文稿预览" title="隐藏预览">×</button>
-          </div>
+      <aside class="topics-panel" aria-labelledby="topicsTitle">
+        <div class="topics-header">
+          <p class="eyebrow">TOPIC INDEX</p>
+          <h2 id="topicsTitle">主题分类</h2>
+          <p class="topics-note">只收录有讨论价值的会议议题</p>
         </div>
-        <p class="preview-note" id="previewNote">最近 500 条 · 本地生成</p>
-        <div class="markdown-scroll" id="markdownScroll">
-          <article class="markdown-body" id="markdownPreview"></article>
-          <div class="markdown-live" id="markdownLive" hidden>
-            <span class="markdown-live-label">此刻</span>
-            <p id="markdownLiveText"></p>
-          </div>
-        </div>
+        <p class="topics-empty" id="topicsEmpty">还没有主题。完成录音后，可使用“按主题分段”生成。</p>
+        <ol class="topic-list" id="topicList"></ol>
       </aside>
     </main>
 
@@ -143,22 +144,6 @@
       <span>录音与文本保存在运行目录的 data 中</span>
     </footer>
   </div>
-
-  <template id="segmentTemplate">
-    <li class="segment-item">
-      <div class="timeline-node" aria-hidden="true"></div>
-      <div class="segment-meta">
-        <button class="segment-speaker" type="button" hidden></button>
-        <time class="segment-time"></time>
-        <span class="segment-duration"></span>
-      </div>
-      <p class="segment-text"></p>
-      <div class="segment-actions">
-        <audio controls preload="none"></audio>
-        <a class="download-link" download>下载录音</a>
-      </div>
-    </li>
-  </template>
 
   <dialog class="dialog" id="deleteDialog" aria-labelledby="deleteDialogTitle">
     <form class="dialog-form" id="deleteForm" method="dialog">
@@ -210,6 +195,34 @@
       <div class="dialog-actions">
         <button class="text-button" id="lexiconCancel" type="button">取消</button>
         <button class="primary-button dialog-submit" id="lexiconSave" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="dialog" id="settingsDialog" aria-labelledby="settingsDialogTitle">
+    <form class="dialog-form" id="settingsForm" method="dialog">
+      <h2 id="settingsDialogTitle">模型与识别</h2>
+      <label class="field">
+        <span>语音识别</span>
+        <select id="settingsASR">
+          <option value="local">本地模型（音频不上传）</option>
+          <option value="mimo">MiMo API · mimo-v2.5-asr</option>
+        </select>
+      </label>
+      <p class="dialog-hint" id="settingsASRHint">VAD 分段和实时临时文本始终在本地处理；这里选择语句结束后的最终识别方式。</p>
+      <label class="field">
+        <span>段落模型</span>
+        <select id="settingsModel"></select>
+      </label>
+      <label class="field field-check">
+        <input id="settingsCorrect" type="checkbox">
+        <span>启用语义修正</span>
+      </label>
+      <p class="dialog-hint">切换模型或暂停修正只影响之后的新段落，历史记录不变。</p>
+      <p class="dialog-error" id="settingsError" hidden></p>
+      <div class="dialog-actions">
+        <button class="text-button" id="settingsCancel" type="button">取消</button>
+        <button class="primary-button dialog-submit" id="settingsSave" type="submit">保存</button>
       </div>
     </form>
   </dialog>

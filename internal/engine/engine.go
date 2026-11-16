@@ -24,6 +24,11 @@ const (
 	StateStopping CaptureState = "STOPPING"
 )
 
+const (
+	ASRProviderLocal = "local"
+	ASRProviderMiMo  = "mimo"
+)
+
 type Status struct {
 	State         CaptureState `json:"state"`
 	StartedAt     *time.Time   `json:"startedAt,omitempty"`
@@ -50,17 +55,21 @@ type Options struct {
 	SpeakerThreshold float32
 	Lexicon          *lexicon.Lexicon
 	OnSegment        func(store.Segment) // must not block
+	ASRProvider      string
+	CloudASR         AudioTranscriber
 }
 
 type Engine struct {
-	paths      ModelPaths
-	store      *store.Store
-	recognizer *sherpa.OnlineRecognizer
-	secondary  *sherpa.OnlineRecognizer
-	refiner    *sherpa.OfflineRecognizer
-	speakerEx  *sherpa.SpeakerEmbeddingExtractor
-	speakers   *speaker.Registry
-	lexicon    *lexicon.Lexicon
+	paths       ModelPaths
+	store       *store.Store
+	recognizer  *sherpa.OnlineRecognizer
+	secondary   *sherpa.OnlineRecognizer
+	refiner     *sherpa.OfflineRecognizer
+	speakerEx   *sherpa.SpeakerEmbeddingExtractor
+	speakers    *speaker.Registry
+	lexicon     *lexicon.Lexicon
+	cloudASR    AudioTranscriber
+	asrProvider string
 
 	opMu            sync.Mutex
 	mu              sync.RWMutex
@@ -74,6 +83,15 @@ type Engine struct {
 }
 
 func New(paths ModelPaths, segmentStore *store.Store, opts Options) (*Engine, error) {
+	if opts.ASRProvider == "" {
+		opts.ASRProvider = ASRProviderLocal
+	}
+	if opts.ASRProvider != ASRProviderLocal && opts.ASRProvider != ASRProviderMiMo {
+		return nil, fmt.Errorf("unknown ASR provider %q", opts.ASRProvider)
+	}
+	if opts.ASRProvider == ASRProviderMiMo && opts.CloudASR == nil {
+		return nil, fmt.Errorf("MiMo ASR is not configured")
+	}
 	recognizer, err := NewOnlineRecognizer(paths)
 	if err != nil {
 		return nil, err
@@ -84,14 +102,16 @@ func New(paths ModelPaths, segmentStore *store.Store, opts Options) (*Engine, er
 		return nil, err
 	}
 	engine := &Engine{
-		paths:      paths,
-		store:      segmentStore,
-		recognizer: recognizer,
-		refiner:    refiner,
-		status:     Status{State: StateStopped},
-		events:     make(chan Event, 256),
-		onSegment:  opts.OnSegment,
-		lexicon:    opts.Lexicon,
+		paths:       paths,
+		store:       segmentStore,
+		recognizer:  recognizer,
+		refiner:     refiner,
+		status:      Status{State: StateStopped},
+		events:      make(chan Event, 256),
+		onSegment:   opts.OnSegment,
+		lexicon:     opts.Lexicon,
+		cloudASR:    opts.CloudASR,
+		asrProvider: opts.ASRProvider,
 	}
 	if paths.SecondaryASRDir != "" {
 		secondaryPaths := paths
@@ -232,11 +252,49 @@ func (e *Engine) IdentifySamples(samples []float32, duration time.Duration) stri
 	return e.speakers.IdentifyWithQuality(embedding, duration, quality)
 }
 
+func (e *Engine) SetASRProvider(provider string) error {
+	if provider != ASRProviderLocal && provider != ASRProviderMiMo {
+		return fmt.Errorf("ASR provider must be %q or %q", ASRProviderLocal, ASRProviderMiMo)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if provider == ASRProviderMiMo && e.cloudASR == nil {
+		return fmt.Errorf("MiMo ASR is not configured")
+	}
+	e.asrProvider = provider
+	return nil
+}
+
 func (e *Engine) refine(samples []float32) string {
 	return e.refineWithAlternatives(samples, e.onlineTranscript(samples), e.secondaryTranscript(samples))
 }
 
+func (e *Engine) cloudTranscript(samples []float32) (string, error) {
+	e.mu.RLock()
+	provider := e.asrProvider
+	cloud := e.cloudASR
+	e.mu.RUnlock()
+	if provider != ASRProviderMiMo {
+		return "", nil
+	}
+	text, err := cloud.Transcribe(samples)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(text), nil
+}
+
 func (e *Engine) refineWithAlternatives(samples []float32, online, secondary string) string {
+	e.mu.RLock()
+	provider := e.asrProvider
+	e.mu.RUnlock()
+	if provider == ASRProviderMiMo {
+		if text, err := e.cloudTranscript(samples); err == nil {
+			return e.lexicon.Apply(text)
+		} else {
+			log.Printf("MiMo ASR 暂不可用，本段使用本地识别: %v", err)
+		}
+	}
 	stream := sherpa.NewOfflineStream(e.refiner)
 	defer sherpa.DeleteOfflineStream(stream)
 	stream.AcceptWaveform(SampleRate, samples)

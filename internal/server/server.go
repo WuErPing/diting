@@ -39,6 +39,17 @@ type SpeakerDirectory interface {
 	SetSpeakerMerge(label, target string) error
 }
 
+type SettingsDirectory interface {
+	Snapshot() paragraph.Snapshot
+	Update(model string, correct bool, providers ...string) error
+	AvailableModels(ctx context.Context) ([]string, error)
+	CorrectRecent(ctx context.Context, limit int) (paragraph.CorrectionResult, error)
+	CorrectParagraph(ctx context.Context, id string) (paragraph.CorrectionResult, error)
+	RetranscribeParagraph(ctx context.Context, id string) (paragraph.ASRResult, error)
+	SummarizeParagraph(ctx context.Context, id string) (paragraph.SummaryResult, error)
+	SplitRecent(ctx context.Context, limit int) (paragraph.RebuildStats, error)
+}
+
 type Server struct {
 	engine          *engine.Engine
 	store           *store.Store
@@ -46,6 +57,7 @@ type Server struct {
 	merge           bool
 	lexicon         *lexicon.Lexicon
 	speakers        SpeakerDirectory
+	settings        SettingsDirectory
 	onArchiveChange func()
 	hub             *eventHub
 	mux             *http.ServeMux
@@ -57,13 +69,14 @@ type Server struct {
 
 func New(ctx context.Context, recognizer *engine.Engine, segmentStore *store.Store,
 	paragraphs *paragraph.Store, merge bool, lex *lexicon.Lexicon,
-	onArchiveChange func(), assets fs.FS) *Server {
+	settings SettingsDirectory, onArchiveChange func(), assets fs.FS) *Server {
 	s := &Server{
 		engine:          recognizer,
 		store:           segmentStore,
 		paragraphs:      paragraphs,
 		merge:           merge,
 		lexicon:         lex,
+		settings:        settings,
 		onArchiveChange: onArchiveChange,
 		mux:             http.NewServeMux(),
 	}
@@ -82,6 +95,15 @@ func New(ctx context.Context, recognizer *engine.Engine, segmentStore *store.Sto
 	s.mux.HandleFunc("PUT /api/speakers/{label}/merge", s.handleSpeakerMerge)
 	s.mux.HandleFunc("GET /api/lexicon", s.handleLexicon)
 	s.mux.HandleFunc("PUT /api/lexicon", s.handleLexiconUpdate)
+	s.mux.HandleFunc("GET /api/settings", s.handleSettings)
+	s.mux.HandleFunc("PUT /api/settings", s.handleSettingsUpdate)
+	s.mux.HandleFunc("GET /api/models", s.handleModels)
+	s.mux.HandleFunc("GET /api/paragraphs", s.handleParagraphs)
+	s.mux.HandleFunc("POST /api/paragraphs/split", s.handleSplitParagraphs)
+	s.mux.HandleFunc("POST /api/paragraphs/correct", s.handleCorrectParagraphs)
+	s.mux.HandleFunc("POST /api/paragraphs/{id}/correct", s.handleCorrectParagraph)
+	s.mux.HandleFunc("POST /api/paragraphs/{id}/asr", s.handleRetranscribeParagraph)
+	s.mux.HandleFunc("POST /api/paragraphs/{id}/summarize", s.handleSummarizeParagraph)
 	s.mux.HandleFunc("PUT /api/capture", s.handleCapture)
 	s.mux.HandleFunc("GET /api/segments", s.handleSegments)
 	s.mux.HandleFunc("GET /api/segments/{id}/audio", s.handleAudio)
