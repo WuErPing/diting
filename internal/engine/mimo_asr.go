@@ -28,6 +28,9 @@ type MiMoASRConfig struct {
 	Model    string
 	Language string
 	Timeout  time.Duration
+	// OnUsage, when set, receives the raw usage object of each successful
+	// API response.
+	OnUsage func(model string, usage json.RawMessage, durationMs int64)
 }
 
 type MiMoASR struct {
@@ -36,6 +39,7 @@ type MiMoASR struct {
 	model    string
 	language string
 	http     *http.Client
+	onUsage  func(model string, usage json.RawMessage, durationMs int64)
 }
 
 func NewMiMoASR(config MiMoASRConfig) *MiMoASR {
@@ -54,6 +58,7 @@ func NewMiMoASR(config MiMoASRConfig) *MiMoASR {
 		model:    config.Model,
 		language: config.Language,
 		http:     &http.Client{Timeout: config.Timeout},
+		onUsage:  config.OnUsage,
 	}
 }
 
@@ -109,6 +114,7 @@ func (c *MiMoASR) Transcribe(samples []float32) (string, error) {
 		request.Header.Set("api-key", c.apiKey)
 		request.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
+	started := time.Now()
 	response, err := c.http.Do(request)
 	if err != nil {
 		return "", fmt.Errorf("MiMo ASR request failed: %w", err)
@@ -118,6 +124,7 @@ func (c *MiMoASR) Transcribe(samples []float32) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read MiMo ASR response: %w", err)
 	}
+	durationMs := time.Since(started).Milliseconds()
 	if response.StatusCode != http.StatusOK {
 		var payload struct {
 			Error struct {
@@ -136,9 +143,13 @@ func (c *MiMoASR) Transcribe(samples []float32) (string, error) {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Usage json.RawMessage `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return "", fmt.Errorf("decode MiMo ASR response: %w", err)
+	}
+	if c.onUsage != nil && len(payload.Usage) > 0 {
+		c.onUsage(c.model, payload.Usage, durationMs)
 	}
 	if len(payload.Choices) == 0 {
 		return "", fmt.Errorf("MiMo ASR returned no choices")

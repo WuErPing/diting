@@ -24,7 +24,21 @@ var markdownEscaper = strings.NewReplacer(
 	">", `\>`,
 )
 
+func requestedDate(r *http.Request) (string, bool) {
+	date := r.URL.Query().Get("date")
+	if date == "" {
+		return "", true
+	}
+	parsed, err := time.ParseInLocation("2006-01-02", date, time.Local)
+	return date, err == nil && parsed.Format("2006-01-02") == date
+}
+
 func (s *Server) handleMarkdown(w http.ResponseWriter, r *http.Request) {
+	date, ok := requestedDate(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "INVALID_DATE", "日期必须是 YYYY-MM-DD")
+		return
+	}
 	limit := 0
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
@@ -57,7 +71,7 @@ func (s *Server) handleMarkdown(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("download") == "1" {
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "diting-"+now.Format("20060102-150405")+".md"))
 	}
-	_, _ = w.Write([]byte(buildMarkdown(segments, paragraphs, len(segments), limit, now)))
+	_, _ = w.Write([]byte(buildMarkdownOnDate(segments, paragraphs, len(segments), limit, now, date)))
 }
 
 type markdownItem struct {
@@ -73,6 +87,10 @@ func (item markdownItem) start() time.Time {
 }
 
 func buildMarkdown(segments []store.Segment, paragraphs []paragraph.Paragraph, total, limit int, now time.Time) string {
+	return buildMarkdownOnDate(segments, paragraphs, total, limit, now, "")
+}
+
+func buildMarkdownOnDate(segments []store.Segment, paragraphs []paragraph.Paragraph, total, limit int, now time.Time, date string) string {
 	var b strings.Builder
 	b.WriteString("# 谛听转录\n\n")
 	if total == 0 {
@@ -80,7 +98,20 @@ func buildMarkdown(segments []store.Segment, paragraphs []paragraph.Paragraph, t
 		return b.String()
 	}
 
+	if date != "" {
+		limit = 0
+	}
 	items := windowItems(segments, paragraphs, limit)
+	if date != "" {
+		selected := items[:0]
+		for _, item := range items {
+			if item.start().Local().Format("2006-01-02") == date {
+				selected = append(selected, item)
+			}
+		}
+		items = selected
+		total = len(items)
+	}
 	if len(items) == 0 {
 		b.WriteString("> 暂无记录。\n")
 		return b.String()

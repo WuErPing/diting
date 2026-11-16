@@ -18,6 +18,7 @@ import (
 	"time"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/v2/sherpa_onnx"
+	"github.com/wuerping/tokusage"
 
 	"diting/internal/engine"
 	"diting/internal/lexicon"
@@ -118,6 +119,28 @@ func run(cfg config) error {
 	}
 	defer segmentStore.Close()
 
+	var onUsage func(model string, usage json.RawMessage, durationMs int64)
+	recorder, err := tokusage.Open(tokusage.Options{
+		LedgerPath: filepath.Join(cfg.data, "tokusage.jsonl"),
+		ExportPath: filepath.Join(cfg.data, "tui-data-cache.json"),
+		Logf:       log.Printf,
+	})
+	if err != nil {
+		log.Printf("token 用量统计不可用（不影响转写）: %v", err)
+	} else {
+		defer recorder.Close()
+		onUsage = func(model string, usage json.RawMessage, durationMs int64) {
+			u, ok := tokusage.ParseOpenAIUsage(usage)
+			if !ok {
+				return
+			}
+			u.DurationMs = durationMs
+			if err := recorder.Record(tokusage.Entry{Client: "diting", Provider: "mimo", Model: model, Usage: u}); err != nil {
+				log.Printf("记录 token 用量失败: %v", err)
+			}
+		}
+	}
+
 	lex, err := lexicon.Open(filepath.Join(cfg.data, "lexicon.json"))
 	if err != nil {
 		return err
@@ -133,7 +156,7 @@ func run(cfg config) error {
 		if err != nil {
 			return err
 		}
-		client = paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, APIKey: cfg.llmAPIKey, Model: cfg.llmModel})
+		client = paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, APIKey: cfg.llmAPIKey, Model: cfg.llmModel, OnUsage: onUsage})
 		worker = paragraph.NewWorker(paragraph.WorkerOptions{
 			Store:      paragraphStore,
 			Segments:   segmentStore,
@@ -148,7 +171,7 @@ func run(cfg config) error {
 		defer worker.Close()
 	}
 
-	options := engineOptions(cfg, lex)
+	options := engineOptions(cfg, lex, onUsage)
 	if worker != nil {
 		options.OnSegment = worker.Notify
 	}
@@ -300,7 +323,7 @@ func modelPaths(cfg config) engine.ModelPaths {
 	return paths
 }
 
-func engineOptions(cfg config, lex *lexicon.Lexicon) engine.Options {
+func engineOptions(cfg config, lex *lexicon.Lexicon, onUsage func(model string, usage json.RawMessage, durationMs int64)) engine.Options {
 	return engine.Options{
 		SpeakerRegistry:  filepath.Join(cfg.data, "speakers.json"),
 		SpeakerThreshold: float32(cfg.speakerThreshold),
@@ -309,6 +332,7 @@ func engineOptions(cfg config, lex *lexicon.Lexicon) engine.Options {
 		CloudASR: engine.NewMiMoASR(engine.MiMoASRConfig{
 			BaseURL: cfg.llmURL,
 			APIKey:  cfg.llmAPIKey,
+			OnUsage: onUsage,
 		}),
 	}
 }
@@ -336,7 +360,7 @@ func verify(cfg config) error {
 	if err != nil {
 		return err
 	}
-	recognizer, err := engine.New(modelPaths(cfg), segmentStore, engineOptions(cfg, lex))
+	recognizer, err := engine.New(modelPaths(cfg), segmentStore, engineOptions(cfg, lex, nil))
 	if err != nil {
 		return err
 	}
@@ -385,7 +409,7 @@ func retranscribe(cfg config) error {
 	if err != nil {
 		return err
 	}
-	recognizer, err := engine.New(modelPaths(cfg), segmentStore, engineOptions(cfg, lex))
+	recognizer, err := engine.New(modelPaths(cfg), segmentStore, engineOptions(cfg, lex, nil))
 	if err != nil {
 		return err
 	}

@@ -102,6 +102,60 @@ func TestHandleSummarizeParagraph(t *testing.T) {
 	}
 }
 
+func TestHandleParagraphsFiltersByStartDate(t *testing.T) {
+	segmentStore, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer segmentStore.Close()
+	previousStart := time.Date(2026, 11, 9, 23, 59, 0, 0, time.Local)
+	dayStart := time.Date(2026, 11, 10, 0, 2, 0, 0, time.Local)
+	segments := []store.Segment{
+		{ID: "p", StartedAt: previousStart, EndedAt: previousStart.Add(time.Second)},
+		{ID: "q", StartedAt: previousStart.Add(time.Minute), EndedAt: previousStart.Add(2 * time.Minute)},
+		{ID: "a", StartedAt: dayStart, EndedAt: dayStart.Add(time.Second)},
+		{ID: "b", StartedAt: dayStart.Add(time.Minute), EndedAt: dayStart.Add(2 * time.Minute)},
+	}
+	if err := segmentStore.Rewrite(segments); err != nil {
+		t.Fatal(err)
+	}
+	paragraphStore, err := paragraph.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := paragraphStore.SaveMany([]paragraph.Paragraph{
+		{ID: "p", StartedAt: segments[0].StartedAt, EndedAt: segments[1].EndedAt, SegmentIDs: []string{"p", "q"}},
+		{ID: "a", StartedAt: segments[2].StartedAt, EndedAt: segments[2].EndedAt, SegmentIDs: []string{"a"}},
+		{ID: "b", StartedAt: segments[3].StartedAt, EndedAt: segments[3].EndedAt, SegmentIDs: []string{"b"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := &Server{store: segmentStore, paragraphs: paragraphStore, merge: true}
+	recorder := httptest.NewRecorder()
+	server.handleParagraphs(recorder, httptest.NewRequest(http.MethodGet, "/api/paragraphs?date=2026-11-10&limit=1", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body)
+	}
+	var response struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Data) != 2 || response.Data[0].ID != "a" || response.Data[1].ID != "b" {
+		t.Fatalf("filtered paragraphs = %+v", response.Data)
+	}
+
+	recorder = httptest.NewRecorder()
+	server.handleParagraphs(recorder, httptest.NewRequest(http.MethodGet, "/api/paragraphs?date=2026-02-30", nil))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("invalid date status = %d", recorder.Code)
+	}
+}
+
 func TestHandleParagraphsRecent(t *testing.T) {
 	segmentStore, err := store.Open(t.TempDir())
 	if err != nil {

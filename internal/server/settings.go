@@ -191,6 +191,11 @@ type paragraphMetadata struct {
 }
 
 func (s *Server) handleParagraphs(w http.ResponseWriter, r *http.Request) {
+	date, ok := requestedDate(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "INVALID_DATE", "日期必须是 YYYY-MM-DD")
+		return
+	}
 	limit := 500
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
@@ -212,7 +217,16 @@ func (s *Server) handleParagraphs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "PARAGRAPHS_FAILED", "无法读取段落信息")
 		return
 	}
-	selected := paragraph.RecentParagraphs(s.paragraphs.All(), segments, limit)
+	var selected []paragraph.Paragraph
+	if date != "" {
+		for _, item := range s.paragraphs.All() {
+			if item.StartedAt.Local().Format("2006-01-02") == date {
+				selected = append(selected, item)
+			}
+		}
+	} else {
+		selected = paragraph.RecentParagraphs(s.paragraphs.All(), segments, limit)
+	}
 	for _, item := range selected {
 		data = append(data, paragraphMetadata{
 			ID: item.ID, StartedAt: item.StartedAt, EndedAt: item.EndedAt,

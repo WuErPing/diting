@@ -703,18 +703,23 @@ function renderMarkdown(source) {
   return html;
 }
 
-function applyPreviewVisibility() {
+function previewQuery() {
+  return selectedDay ? `date=${encodeURIComponent(selectedDay)}` : `limit=${previewLimit}`;
+}
+
+function applyPreviewVisibility(scrollToStart = false) {
   elements.console.classList.toggle("is-preview-hidden", !previewVisible);
   elements.previewPanel.hidden = !previewVisible;
   elements.showPreviewButton.hidden = previewVisible;
-  return loadMarkdown();
+  return loadMarkdown(scrollToStart);
 }
 
-async function loadMarkdown() {
+async function loadMarkdown(scrollToStart = false) {
   const request = ++previewRequest;
+  const query = previewQuery();
   if (!previewVisible) {
     try {
-      const paragraphData = await api(`/api/paragraphs?limit=${previewLimit}`);
+      const paragraphData = await api(`/api/paragraphs?${query}`);
       if (request !== previewRequest) return false;
       renderTopics(paragraphData.data || []);
       return true;
@@ -730,8 +735,8 @@ async function loadMarkdown() {
   const previousTop = scroll.scrollTop;
   try {
     const [response, paragraphData] = await Promise.all([
-      fetch(`/api/markdown?limit=${previewLimit}`),
-      api(`/api/paragraphs?limit=${previewLimit}`),
+      fetch(`/api/markdown?${query}`),
+      api(`/api/paragraphs?${query}`),
     ]);
     if (!response.ok) throw new Error("生成合并文稿失败");
     const source = await response.text();
@@ -741,7 +746,13 @@ async function loadMarkdown() {
     elements.markdownPreview.innerHTML = renderMarkdown(source);
     linkifyPreviewSpeakers();
     addParagraphCorrectionButtons(paragraphData.data || []);
-    if (!previewLoaded || nearBottom) {
+    if (scrollToStart) {
+      scroll.scrollTop = 0;
+      requestAnimationFrame(() => {
+        if (request !== previewRequest) return;
+        scroll.scrollTop = 0;
+      });
+    } else if (!previewLoaded || nearBottom) {
       scroll.scrollTop = scroll.scrollHeight;
       // Re-run after layout settles so the first paint already shows the newest entry.
       requestAnimationFrame(() => {
@@ -753,7 +764,9 @@ async function loadMarkdown() {
     }
     previewLoaded = true;
     if (!correctingPreview && !splittingPreview && !retranscribingPreview && !summarizingPreview) {
-      elements.previewNote.textContent = `最近 ${previewLimit} 条 · 模型议题`;
+      elements.previewNote.textContent = selectedDay
+        ? `${formatDayLabel(selectedDay)} · 当天开始的段落`
+        : `最近 ${previewLimit} 条 · 模型议题`;
       elements.previewNote.classList.remove("is-error");
     }
     return true;
@@ -1152,24 +1165,43 @@ function connectEvents() {
   });
 }
 
+async function showCalendarSelection() {
+  const scrollToStart = Boolean(selectedDay);
+  if (scrollToStart) {
+    previewVisible = true;
+    savePreviewPreference(true);
+  } else {
+    previewLoaded = false;
+  }
+  const loaded = await applyPreviewVisibility(scrollToStart);
+  if (scrollToStart && loaded) {
+    elements.previewPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
 elements.toggleButton.addEventListener("click", toggleCapture);
 elements.calendarPrev.addEventListener("click", () => {
+  const hadSelection = Boolean(selectedDay);
   calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() - 1, 1);
   selectedDay = "";
   renderCalendar();
   renderDayDetail();
+  if (hadSelection) showCalendarSelection();
 });
 elements.calendarNext.addEventListener("click", () => {
+  const hadSelection = Boolean(selectedDay);
   calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + 1, 1);
   selectedDay = "";
   renderCalendar();
   renderDayDetail();
+  if (hadSelection) showCalendarSelection();
 });
 elements.calendarGrid.addEventListener("click", (event) => {
   const cell = event.target.closest(".calendar-cell");
   if (!cell || cell.disabled) return;
   selectedDay = selectedDay === cell.dataset.date ? "" : cell.dataset.date;
   renderDayDetail();
+  showCalendarSelection();
 });
 elements.calendarDeleteButton.addEventListener("click", openDeleteDialog);
 elements.deleteCancel.addEventListener("click", () => elements.deleteDialog.close());

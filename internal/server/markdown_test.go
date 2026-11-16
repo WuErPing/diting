@@ -105,6 +105,56 @@ func TestHandleMarkdownRejectsInvalidLimit(t *testing.T) {
 	}
 }
 
+func TestHandleMarkdownFiltersByParagraphStartDate(t *testing.T) {
+	segmentStore, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer segmentStore.Close()
+	previousStart := time.Date(2026, 11, 6, 23, 59, 0, 0, time.Local)
+	dayStart := time.Date(2026, 11, 7, 0, 2, 0, 0, time.Local)
+	segments := []store.Segment{
+		{ID: "a", StartedAt: previousStart, EndedAt: previousStart.Add(time.Second), Text: "前日开始。"},
+		{ID: "b", StartedAt: previousStart.Add(time.Minute), EndedAt: previousStart.Add(2 * time.Minute), Text: "跨日继续。"},
+		{ID: "c", StartedAt: dayStart, EndedAt: dayStart.Add(time.Second), Text: "当日开始。"},
+	}
+	if err := segmentStore.Rewrite(segments); err != nil {
+		t.Fatal(err)
+	}
+	paragraphStore, err := paragraph.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := paragraphStore.SaveMany([]paragraph.Paragraph{
+		{ID: "a", StartedAt: segments[0].StartedAt, EndedAt: segments[1].EndedAt, Text: "前日段落", SegmentIDs: []string{"a", "b"}},
+		{ID: "c", StartedAt: segments[2].StartedAt, EndedAt: segments[2].EndedAt, Text: "当日段落", SegmentIDs: []string{"c"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := &Server{store: segmentStore, paragraphs: paragraphStore, merge: true}
+	recorder := httptest.NewRecorder()
+	server.handleMarkdown(recorder, httptest.NewRequest(http.MethodGet, "/api/markdown?date=2026-11-07&limit=1", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "当日段落") || !strings.Contains(body, "## 2026-11-07") {
+		t.Fatalf("selected day missing:\n%s", body)
+	}
+	for _, unwanted := range []string{"前日段落", "跨日继续", "## 2026-11-06", "最近 1 条"} {
+		if strings.Contains(body, unwanted) {
+			t.Fatalf("unexpected %q in selected day:\n%s", unwanted, body)
+		}
+	}
+
+	recorder = httptest.NewRecorder()
+	server.handleMarkdown(recorder, httptest.NewRequest(http.MethodGet, "/api/markdown?date=2026-02-30", nil))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("invalid date status = %d", recorder.Code)
+	}
+}
+
 func TestBuildMarkdownRendersParagraphs(t *testing.T) {
 	now := time.Date(2026, 11, 6, 22, 0, 0, 0, time.Local)
 	base := time.Date(2026, 11, 6, 14, 0, 0, 0, time.Local)

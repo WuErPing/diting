@@ -58,6 +58,9 @@ type ClientConfig struct {
 	APIKey  string
 	Model   string
 	Timeout time.Duration
+	// OnUsage, when set, receives the raw usage object of each successful
+	// API response (including truncated ones, which still consume tokens).
+	OnUsage func(model string, usage json.RawMessage, durationMs int64)
 }
 
 type Client struct {
@@ -67,6 +70,7 @@ type Client struct {
 	model   string
 	mimo    bool
 	http    *http.Client
+	onUsage func(model string, usage json.RawMessage, durationMs int64)
 }
 
 func NewClient(cfg ClientConfig) *Client {
@@ -85,6 +89,7 @@ func NewClient(cfg ClientConfig) *Client {
 		model:   cfg.Model,
 		mimo:    isMiMoURL(cfg.BaseURL),
 		http:    &http.Client{Timeout: cfg.Timeout},
+		onUsage: cfg.OnUsage,
 	}
 }
 
@@ -386,6 +391,7 @@ func invalidCorrection(err error) error {
 // complete posts a chat request and returns the first choice content. It falls
 // back to a schema-less retry when the server rejects response_format.
 func (c *Client) complete(ctx context.Context, request chatRequest) (string, error) {
+	started := time.Now()
 	body, err := json.Marshal(request)
 	if err != nil {
 		return "", fmt.Errorf("encode 模型服务 request: %w", err)
@@ -408,6 +414,9 @@ func (c *Client) complete(ctx context.Context, request chatRequest) (string, err
 	var payload chatResponse
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return "", fmt.Errorf("decode 模型服务 response: %w", err)
+	}
+	if c.onUsage != nil && len(payload.Usage) > 0 {
+		c.onUsage(request.Model, payload.Usage, time.Since(started).Milliseconds())
 	}
 	if len(payload.Choices) == 0 {
 		return "", errNoChoices
@@ -502,6 +511,7 @@ type chatResponse struct {
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage json.RawMessage `json:"usage"`
 }
 
 func (c *Client) chatRequest(texts []string) chatRequest {

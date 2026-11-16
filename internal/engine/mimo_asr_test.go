@@ -77,3 +77,37 @@ func TestMiMoASRReturnsProviderError(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestMiMoASRReportsUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"识别文本"}}],"usage":{"prompt_tokens":80,"completion_tokens":10}}`))
+	}))
+	defer server.Close()
+
+	var gotModel string
+	var gotUsage json.RawMessage
+	calls := 0
+	client := NewMiMoASR(MiMoASRConfig{
+		BaseURL: server.URL + "/v1",
+		OnUsage: func(model string, usage json.RawMessage, durationMs int64) {
+			calls++
+			gotModel = model
+			gotUsage = usage
+			if durationMs < 0 {
+				t.Errorf("durationMs = %d", durationMs)
+			}
+		},
+	})
+	if _, err := client.Transcribe([]float32{0, 0.25, -0.25}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || gotModel != "mimo-v2.5-asr" {
+		t.Fatalf("calls = %d, model = %q", calls, gotModel)
+	}
+	var u struct {
+		PromptTokens int64 `json:"prompt_tokens"`
+	}
+	if err := json.Unmarshal(gotUsage, &u); err != nil || u.PromptTokens != 80 {
+		t.Fatalf("usage = %s, err = %v", gotUsage, err)
+	}
+}
