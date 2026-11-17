@@ -1,7 +1,6 @@
 package server
 
 import (
-	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -43,10 +42,20 @@ func (s *Server) handleDeleteDay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, deleteErr := s.store.DeleteDay(date)
+	dryRun := r.URL.Query().Get("dryRun") == "1" || r.URL.Query().Get("dryRun") == "true"
+	result, deleteErr := s.store.DeleteDay(date, dryRun)
+	if deleteErr != nil {
+		log.Printf("删除 %s 的数据失败: %v", date, deleteErr)
+		writeError(w, http.StatusInternalServerError, "DAY_DELETE_FAILED", "删除当天数据失败")
+		return
+	}
+	if dryRun {
+		writeJSON(w, http.StatusOK, deleteDayResponse{DayDelete: result})
+		return
+	}
 	removedParagraphs, cleanupErr := s.finishDayDeletion(result)
-	if err := errors.Join(deleteErr, cleanupErr); err != nil {
-		log.Printf("删除 %s 的数据失败: %v", date, err)
+	if cleanupErr != nil {
+		log.Printf("清理 %s 的派生段落失败: %v", date, cleanupErr)
 		writeError(w, http.StatusInternalServerError, "DAY_DELETE_FAILED", "删除当天数据失败")
 		return
 	}

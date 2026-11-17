@@ -161,7 +161,7 @@ func TestDeleteDayMovesAudioToTrash(t *testing.T) {
 		}
 	}
 
-	result, err := segmentStore.DeleteDay("2026-11-06")
+	result, err := segmentStore.DeleteDay("2026-11-06", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,8 +194,120 @@ func TestDeleteDayMovesAudioToTrash(t *testing.T) {
 		t.Fatalf("backup = %d, want 3", len(backup))
 	}
 
-	if _, err := segmentStore.DeleteDay("2026-13-01"); err == nil {
+	if _, err := segmentStore.DeleteDay("2026-13-01", false); err == nil {
 		t.Fatal("expected invalid date error")
+	}
+}
+
+func TestDeleteDayDryRunDoesNotModifyFiles(t *testing.T) {
+	t.Setenv("DITING_AUDIO_FORMAT", "wav")
+	root := t.TempDir()
+	segmentStore, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer segmentStore.Close()
+
+	started := time.Date(2026, 11, 6, 14, 0, 0, 0, time.Local)
+	if _, err := segmentStore.Save(Segment{
+		ID:        started.Format("20060102-150405.000000000"),
+		StartedAt: started,
+		EndedAt:   started.Add(time.Second),
+		Text:      "保留文本",
+	}, []float32{0.1}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := segmentStore.DeleteDay("2026-11-06", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.DryRun || result.Segments != 1 || result.AudioFiles != 1 {
+		t.Fatalf("dry-run result = %+v", result)
+	}
+	segments, err := segmentStore.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segments) != 1 || segments[0].Text != "保留文本" {
+		t.Fatalf("dry-run modified transcripts: %+v", segments)
+	}
+	if _, err := os.Stat(filepath.Join(root, audioDir, "20261106")); err != nil {
+		t.Fatalf("dry-run removed audio directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "backups")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created snapshot directory, err = %v", err)
+	}
+}
+
+func TestRestoreDayFromSnapshot(t *testing.T) {
+	t.Setenv("DITING_AUDIO_FORMAT", "wav")
+	trash := t.TempDir()
+	t.Setenv("DITING_TRASH_DIR", trash)
+	root := t.TempDir()
+	segmentStore, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer segmentStore.Close()
+
+	base := time.Date(2026, 11, 6, 14, 0, 0, 0, time.Local)
+	for _, started := range []time.Time{base, base.Add(time.Hour)} {
+		if _, err := segmentStore.Save(Segment{
+			ID:        started.Format("20060102-150405.000000000"),
+			StartedAt: started,
+			EndedAt:   started.Add(time.Second),
+			Text:      "待恢复文本",
+		}, []float32{0.1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other := base.Add(24 * time.Hour)
+	if _, err := segmentStore.Save(Segment{
+		ID:        other.Format("20060102-150405.000000000"),
+		StartedAt: other,
+		EndedAt:   other.Add(time.Second),
+		Text:      "其他日期",
+	}, []float32{0.1}); err != nil {
+		t.Fatal(err)
+	}
+
+	deleteResult, err := segmentStore.DeleteDay("2026-11-06", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleteResult.Snapshot == "" {
+		t.Fatal("missing snapshot path")
+	}
+	segments, err := segmentStore.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segments) != 1 || segments[0].Text != "其他日期" {
+		t.Fatalf("after delete = %+v", segments)
+	}
+
+	restoreResult, err := segmentStore.RestoreDay("2026-11-06")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restoreResult.Restored != 2 || restoreResult.Skipped != 0 {
+		t.Fatalf("restore result = %+v", restoreResult)
+	}
+	segments, err = segmentStore.All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segments) != 3 {
+		t.Fatalf("after restore len = %d", len(segments))
+	}
+
+	second, err := segmentStore.RestoreDay("2026-11-06")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Restored != 0 || second.Skipped != 2 {
+		t.Fatalf("second restore = %+v", second)
 	}
 }
 

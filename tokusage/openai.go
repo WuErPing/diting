@@ -8,8 +8,8 @@ import "encoding/json"
 // sum without double counting. Returns false when usage is absent or all zero.
 func ParseOpenAIUsage(raw []byte) (Usage, bool) {
 	var u struct {
-		PromptTokens     int64 `json:"prompt_tokens"`
-		CompletionTokens int64 `json:"completion_tokens"`
+		PromptTokens        int64 `json:"prompt_tokens"`
+		CompletionTokens    int64 `json:"completion_tokens"`
 		PromptTokensDetails struct {
 			CachedTokens int64 `json:"cached_tokens"`
 		} `json:"prompt_tokens_details"`

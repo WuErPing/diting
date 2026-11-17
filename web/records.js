@@ -1,5 +1,8 @@
 "use strict";
 
+const i18n = window.DitingI18n;
+const t = (key, variables) => i18n.t(key, variables);
+
 const elements = {
   connection: document.querySelector("#connection"),
   connectionText: document.querySelector("#connectionText"),
@@ -20,6 +23,10 @@ const elements = {
   speakerSave: document.querySelector("#speakerSave"),
 };
 
+for (const element of [elements.connectionText, elements.speakerMergeHint]) {
+  element.removeAttribute("data-i18n");
+}
+
 const segments = new Map();
 const speakerViews = new Map();
 let nextBefore = "";
@@ -30,7 +37,7 @@ async function api(path, options = {}) {
   const response = await fetch(path, options);
   const body = await response.json();
   if (!response.ok) {
-    throw new Error(body.error?.message || "本地服务请求失败");
+    throw new Error(i18n.apiError(body.error));
   }
   return body;
 }
@@ -41,7 +48,7 @@ function showError(message) {
 }
 
 function formatTime(value) {
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(i18n.localeTag, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -52,12 +59,12 @@ function formatTime(value) {
 }
 
 function formatDuration(milliseconds) {
-  return `${(milliseconds / 1000).toFixed(1)} 秒`;
+  return t("records.seconds", { seconds: (milliseconds / 1000).toFixed(1) });
 }
 
 function speakerDisplayName(label) {
   const view = speakerViews.get(label);
-  return view ? (view.name || label) : label;
+  return i18n.speakerLabel(view ? (view.name || label) : label);
 }
 
 function isMerged(label) {
@@ -78,7 +85,7 @@ function renderSegments() {
     if (segment.speaker) {
       speaker.textContent = speakerDisplayName(segment.speaker);
       speaker.hidden = false;
-      speaker.title = `标注 ${segment.speaker}`;
+      speaker.title = t("speaker.annotate", { label: i18n.speakerLabel(segment.speaker) });
       speaker.dataset.label = segment.speaker;
       speaker.addEventListener("click", () => openSpeakerDialog(segment.speaker));
       const canonical = speakerViews.get(segment.speaker)?.mergedInto || segment.speaker;
@@ -88,7 +95,7 @@ function renderSegments() {
       speaker.classList.toggle("is-merged", isMerged(segment.speaker));
     }
     const text = item.querySelector(".segment-text");
-    text.textContent = segment.text || "未识别出文字，录音已保留";
+    text.textContent = segment.text || t("records.emptyTranscript");
     text.classList.toggle("is-empty", !segment.text);
     const audioURL = `/api/segments/${encodeURIComponent(segment.id)}/audio`;
     item.querySelector("audio").src = audioURL;
@@ -97,7 +104,8 @@ function renderSegments() {
     download.download = segment.audioPath
       ? segment.audioPath.split("/").pop()
       : `${segment.id}.wav`;
-    download.setAttribute("aria-label", `下载 ${formatTime(segment.startedAt)} 的录音`);
+    download.textContent = t("records.download");
+    download.setAttribute("aria-label", t("records.downloadLabel", { time: formatTime(segment.startedAt) }));
     fragment.append(item);
   }
   elements.segmentList.replaceChildren(fragment);
@@ -115,12 +123,19 @@ async function loadSpeakers() {
   }
 }
 
+function updateSpeakerMergeHint() {
+  const mergedInto = speakerViews.get(activeSpeakerLabel)?.mergedInto;
+  elements.speakerMergeHint.textContent = mergedInto
+    ? t("speaker.mergeHintCurrent", { name: speakerDisplayName(mergedInto) })
+    : t("speaker.mergeHint");
+}
+
 function openSpeakerDialog(label) {
   if (!label) return;
   activeSpeakerLabel = label;
   const view = speakerViews.get(label);
   const name = view ? (view.name || label) : label;
-  elements.speakerDialogLabel.textContent = label;
+  elements.speakerDialogLabel.textContent = i18n.speakerLabel(label);
   elements.speakerAliasInput.value = name === label ? "" : name;
   elements.speakerAliasInput.disabled = isMerged(label);
 
@@ -128,21 +143,20 @@ function openSpeakerDialog(label) {
   select.replaceChildren();
   const noneOption = document.createElement("option");
   noneOption.value = "";
-  noneOption.textContent = "不合并";
+  noneOption.textContent = t("speaker.mergeNone");
   select.append(noneOption);
   for (const [otherLabel, otherView] of speakerViews) {
     if (otherLabel === label || otherView.mergedInto) continue;
     const option = document.createElement("option");
     option.value = otherLabel;
-    const displayName = otherView.name || otherLabel;
-    option.textContent = displayName === otherLabel ? otherLabel : `${displayName}（${otherLabel}）`;
+    const displayName = i18n.speakerLabel(otherView.name || otherLabel);
+    const stableLabel = i18n.speakerLabel(otherLabel);
+    option.textContent = displayName === stableLabel ? stableLabel : `${displayName} (${stableLabel})`;
     select.append(option);
   }
   select.value = view?.mergedInto || "";
   select.disabled = false;
-  elements.speakerMergeHint.textContent = view?.mergedInto
-    ? `当前已合并到 ${speakerDisplayName(view.mergedInto)}。选择"不合并"可取消。`
-    : "将多个声纹标签合并为同一个人，合并后内容会重新分段。留空可取消合并。";
+  updateSpeakerMergeHint();
   elements.speakerDialogError.hidden = true;
   elements.speakerDialog.showModal();
   if (isMerged(label)) {
@@ -211,14 +225,14 @@ function connectEvents() {
   eventSource = new EventSource("/api/events");
   eventSource.onopen = () => {
     elements.connection.classList.add("is-connected");
-    elements.connectionText.textContent = "实时已连接";
+    elements.connectionText.textContent = t("connection.connected");
     loadHistory();
     loadSpeakers();
   };
   eventSource.onerror = (event) => {
     if (event.data) return;
     elements.connection.classList.remove("is-connected");
-    elements.connectionText.textContent = "连接中断，正在重连";
+    elements.connectionText.textContent = t("connection.reconnecting");
   };
   eventSource.addEventListener("archive", () => {
     loadHistory();
@@ -230,6 +244,24 @@ function connectEvents() {
     renderSegments();
   });
 }
+
+i18n.subscribe(() => {
+  renderSegments();
+  elements.connectionText.textContent = t(elements.connection.classList.contains("is-connected") ? "connection.connected" : "connection.reconnecting");
+  if (elements.speakerDialog.open) {
+    elements.speakerDialogLabel.textContent = i18n.speakerLabel(activeSpeakerLabel);
+    updateSpeakerMergeHint();
+    for (const option of elements.speakerMergeTarget.options) {
+      if (!option.value) {
+        option.textContent = t("speaker.mergeNone");
+        continue;
+      }
+      const displayName = speakerDisplayName(option.value);
+      const stableLabel = i18n.speakerLabel(option.value);
+      option.textContent = displayName === stableLabel ? stableLabel : `${displayName} (${stableLabel})`;
+    }
+  }
+});
 
 elements.refreshButton.addEventListener("click", () => loadHistory());
 elements.loadMoreButton.addEventListener("click", () => loadHistory(true));

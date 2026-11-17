@@ -95,6 +95,34 @@ func TestHandleMarkdownLimitAndDownload(t *testing.T) {
 	}
 }
 
+func TestHandleMarkdownEnglish(t *testing.T) {
+	segmentStore, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer segmentStore.Close()
+	server := &Server{store: segmentStore}
+
+	recorder := httptest.NewRecorder()
+	server.handleMarkdown(recorder, httptest.NewRequest(http.MethodGet, "/api/markdown?lang=en", nil))
+	if body := recorder.Body.String(); !strings.Contains(body, "# Diting transcript") || !strings.Contains(body, "No records yet") {
+		t.Fatalf("empty English markdown = %q", body)
+	}
+
+	startedAt := time.Date(2026, 11, 6, 14, 0, 0, 0, time.Local)
+	if err := segmentStore.Rewrite([]store.Segment{{ID: "a", StartedAt: startedAt, Speaker: "说话人1"}}); err != nil {
+		t.Fatal(err)
+	}
+	recorder = httptest.NewRecorder()
+	server.handleMarkdown(recorder, httptest.NewRequest(http.MethodGet, "/api/markdown?lang=en", nil))
+	body := recorder.Body.String()
+	for _, want := range []string{"1 records", "Exported at", "Speaker 1", "(No text recognized)"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("English markdown missing %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestHandleMarkdownRejectsInvalidLimit(t *testing.T) {
 	server := &Server{store: nil}
 	request := httptest.NewRequest(http.MethodGet, "/api/markdown?limit=0", nil)

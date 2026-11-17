@@ -327,6 +327,47 @@ func TestWorkerInvalidGroupingDoesNotCoolDown(t *testing.T) {
 	}
 }
 
+func TestWorkerLogsModelForGrouping(t *testing.T) {
+	tests := []struct {
+		name          string
+		llmCalls      int
+		invalidGroups bool
+		wantLog       string
+	}{
+		{name: "progress", llmCalls: 19, wantLog: "Paragraph merge progress: model=test-model calls=20"},
+		{
+			name: "failure", invalidGroups: true,
+			wantLog: "Paragraph splitting failed; falling back to concatenation: model=test-model segments=2 chars=4 elapsed=0s err=invalid model grouping: paragraph 2 starts at 2, overlapping the covered range",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			grouper := &fakeGrouper{fn: func(_ int, _ context.Context, texts []string) ([]Group, error) {
+				if tc.invalidGroups {
+					return []Group{{Start: 1, End: 2}, {Start: 2, End: 2}}, nil
+				}
+				return []Group{{Start: 1, End: len(texts)}}, nil
+			}}
+			var logs []string
+			worker := NewWorker(WorkerOptions{
+				Store: openTestStore(t), Grouper: grouper, Model: "test-model", Clock: newFakeClock(testBase),
+				Logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
+			})
+			worker.llmCalls = tc.llmCalls
+			run := []store.Segment{testSegment("a", "说话人1", "你好", testBase, testBase.Add(time.Second))}
+			if tc.invalidGroups {
+				run = append(run, testSegment("b", "说话人1", "世界", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
+			}
+
+			worker.process(context.Background(), job{run: run})
+
+			if got := strings.Join(logs, "\n"); !strings.Contains(got, tc.wantLog) {
+				t.Fatalf("logs = %q, want substring %q", got, tc.wantLog)
+			}
+		})
+	}
+}
+
 func TestWorkerRepairsGappedGrouping(t *testing.T) {
 	clock := newFakeClock(testBase)
 	paragraphStore := openTestStore(t)

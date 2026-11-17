@@ -46,6 +46,18 @@ button:focus-visible, a:focus-visible, audio:focus-visible {
   border-bottom: 1px solid var(--line);
 }
 .identity { display: flex; align-items: center; gap: 16px; }
+.masthead-actions { display: flex; align-items: center; justify-content: flex-end; gap: 20px; }
+.language-control { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.language-control select {
+  min-height: 34px;
+  padding: 0 24px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+.language-control select:focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; }
 .seal {
   width: 52px;
   height: 52px;
@@ -583,6 +595,9 @@ footer {
 @media (max-width: 540px) {
   .app-shell { width: min(100% - 24px, 1600px); }
   .masthead { min-height: 88px; gap: 12px; }
+  .masthead-actions { flex-direction: column-reverse; align-items: flex-end; gap: 4px; }
+  .language-control > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .language-control select { min-height: 30px; font-size: 11px; }
   .identity { gap: 12px; }
   .identity .eyebrow { font-size: 9px; }
   .seal { width: 44px; height: 44px; font-size: 22px; }

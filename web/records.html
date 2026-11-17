@@ -1,11 +1,12 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>声音记录 · 谛听</title>
+  <title data-i18n="page.recordsTitle">Voice Records · Diting</title>
   <link rel="stylesheet" href="/app.css">
+  <script src="/i18n.js" defer></script>
   <script src="/records.js" defer></script>
 </head>
 <body>
@@ -15,13 +16,22 @@
         <div class="seal" aria-hidden="true">听</div>
         <div>
           <p class="eyebrow">LOCAL SPEECH ARCHIVE</p>
-          <h1>谛听</h1>
-          <p class="tagline">逐句人声，原音可寻。</p>
+          <h1 data-i18n="brand.name">Diting</h1>
+          <p class="tagline" data-i18n="tagline.records">Every sentence, with its original voice.</p>
         </div>
       </div>
-      <div class="connection" id="connection" role="status">
-        <span class="connection-dot" aria-hidden="true"></span>
-        <span id="connectionText">正在连接</span>
+      <div class="masthead-actions">
+        <label class="language-control">
+          <span data-i18n="language.label">Language</span>
+          <select data-language-select data-i18n-aria-label="language.label" aria-label="Language">
+            <option value="en">English</option>
+            <option value="zh">中文</option>
+          </select>
+        </label>
+        <div class="connection" id="connection" role="status">
+          <span class="connection-dot" aria-hidden="true"></span>
+          <span id="connectionText" data-i18n="connection.connecting">Connecting</span>
+        </div>
       </div>
     </header>
 
@@ -29,26 +39,26 @@
       <div class="records-header">
         <div>
           <p class="eyebrow">VOICE ARCHIVE</p>
-          <h2 id="recordsTitle">声音记录</h2>
-          <p class="records-intro">逐句转写与原始录音，最新在前。</p>
+          <h2 id="recordsTitle" data-i18n="records.title">Voice records</h2>
+          <p class="records-intro" data-i18n="records.intro">Sentence transcripts and original audio, newest first.</p>
         </div>
         <div class="records-actions">
-          <a class="text-button" href="/">返回首页</a>
-          <button class="text-button" id="refreshButton" type="button">刷新记录</button>
+          <a class="text-button" href="/" data-i18n="records.back">Back home</a>
+          <button class="text-button" id="refreshButton" type="button" data-i18n="records.refresh">Refresh records</button>
         </div>
       </div>
       <p class="error-message" id="errorMessage" role="alert" hidden></p>
       <div class="empty-state" id="emptyState">
-        <p>还没有人声记录</p>
-        <span>回到首页开始聆听，完成的语句会出现在这里。</span>
+        <p data-i18n="records.emptyTitle">No voice records yet</p>
+        <span data-i18n="records.emptyHint">Start listening on the home page. Completed sentences will appear here.</span>
       </div>
       <ol class="timeline" id="segmentList"></ol>
-      <button class="load-more" id="loadMoreButton" type="button" hidden>查看更早记录</button>
+      <button class="load-more" id="loadMoreButton" type="button" data-i18n="records.loadMore" hidden>Load earlier records</button>
     </main>
 
     <footer>
-      <span>逐句记录 · 原始录音 · 本地持久化</span>
-      <span>录音与文本保存在运行目录的 data 中</span>
+      <span data-i18n="footer.recordsCapabilities">Sentence records · Original audio · Local persistence</span>
+      <span data-i18n="footer.storage">Audio and text are stored in data under the working directory</span>
     </footer>
   </div>
 
@@ -63,31 +73,31 @@
       <p class="segment-text"></p>
       <div class="segment-actions">
         <audio controls preload="none"></audio>
-        <a class="download-link" download>下载录音</a>
+        <a class="download-link" data-i18n="records.download" download>Download audio</a>
       </div>
     </li>
   </template>
 
   <dialog class="dialog" id="speakerDialog" aria-labelledby="speakerDialogTitle">
     <form class="dialog-form" id="speakerForm" method="dialog">
-      <h2 id="speakerDialogTitle">标注说话人</h2>
-      <p class="dialog-hint">稳定标签：<span id="speakerDialogLabel"></span></p>
+      <h2 id="speakerDialogTitle" data-i18n="speaker.title">Label speaker</h2>
+      <p class="dialog-hint"><span data-i18n="speaker.stableLabel">Stable label:</span> <span id="speakerDialogLabel"></span></p>
       <label class="field">
-        <span>显示名</span>
-        <input id="speakerAliasInput" type="text" maxlength="32" autocomplete="off" placeholder="例如：章总">
+        <span data-i18n="speaker.aliasLabel">Display name</span>
+        <input id="speakerAliasInput" type="text" maxlength="32" autocomplete="off" data-i18n-placeholder="speaker.aliasPlaceholder" placeholder="e.g. Andy">
       </label>
       <label class="field">
-        <span>合并到</span>
+        <span data-i18n="speaker.mergeLabel">Merge into</span>
         <select id="speakerMergeTarget">
-          <option value="">不合并</option>
+          <option value="" data-i18n="speaker.mergeNone">Do not merge</option>
         </select>
       </label>
-      <p class="dialog-hint" id="speakerMergeHint">将多个声纹标签合并为同一个人，合并后内容会重新分段。留空可取消合并。</p>
-      <p class="dialog-hint">留空显示名可清除人名，恢复显示稳定标签。只影响显示，不改写历史记录。</p>
+      <p class="dialog-hint" id="speakerMergeHint" data-i18n="speaker.mergeHint">Merge multiple voiceprint labels into one person. Content is regrouped after merging. Leave empty to unmerge.</p>
+      <p class="dialog-hint" data-i18n="speaker.aliasHint">Leave the display name empty to restore the stable label. Display only; history is not rewritten.</p>
       <p class="dialog-error" id="speakerDialogError" hidden></p>
       <div class="dialog-actions">
-        <button class="text-button" id="speakerCancel" type="button">取消</button>
-        <button class="primary-button dialog-submit" id="speakerSave" type="submit">保存</button>
+        <button class="text-button" id="speakerCancel" type="button" data-i18n="action.cancel">Cancel</button>
+        <button class="primary-button dialog-submit" id="speakerSave" type="submit" data-i18n="action.save">Save</button>
       </div>
     </form>
   </dialog>

@@ -19,6 +19,7 @@ import (
 
 	"diting/internal/engine"
 	"diting/internal/lexicon"
+	"diting/internal/observability"
 	"diting/internal/paragraph"
 	"diting/internal/speaker"
 	"diting/internal/store"
@@ -86,33 +87,46 @@ func New(ctx context.Context, recognizer *engine.Engine, segmentStore *store.Sto
 	} else {
 		s.hub = newEventHub(ctx, nil, s.speakerName)
 	}
-	s.mux.HandleFunc("GET /api/status", s.handleStatus)
-	s.mux.HandleFunc("GET /api/stats", s.handleStats)
-	s.mux.HandleFunc("GET /api/days", s.handleDays)
-	s.mux.HandleFunc("DELETE /api/days/{date}", s.handleDeleteDay)
-	s.mux.HandleFunc("GET /api/speakers", s.handleSpeakers)
-	s.mux.HandleFunc("PATCH /api/speakers/{label}", s.handleSpeakerAlias)
-	s.mux.HandleFunc("PUT /api/speakers/{label}/merge", s.handleSpeakerMerge)
-	s.mux.HandleFunc("GET /api/lexicon", s.handleLexicon)
-	s.mux.HandleFunc("PUT /api/lexicon", s.handleLexiconUpdate)
-	s.mux.HandleFunc("GET /api/settings", s.handleSettings)
-	s.mux.HandleFunc("PUT /api/settings", s.handleSettingsUpdate)
-	s.mux.HandleFunc("GET /api/models", s.handleModels)
-	s.mux.HandleFunc("GET /api/paragraphs", s.handleParagraphs)
-	s.mux.HandleFunc("POST /api/paragraphs/split", s.handleSplitParagraphs)
-	s.mux.HandleFunc("POST /api/paragraphs/correct", s.handleCorrectParagraphs)
-	s.mux.HandleFunc("POST /api/paragraphs/{id}/correct", s.handleCorrectParagraph)
-	s.mux.HandleFunc("POST /api/paragraphs/{id}/asr", s.handleRetranscribeParagraph)
-	s.mux.HandleFunc("POST /api/paragraphs/{id}/summarize", s.handleSummarizeParagraph)
-	s.mux.HandleFunc("PUT /api/capture", s.handleCapture)
-	s.mux.HandleFunc("GET /api/segments", s.handleSegments)
-	s.mux.HandleFunc("GET /api/segments/{id}/audio", s.handleAudio)
-	s.mux.HandleFunc("GET /api/markdown", s.handleMarkdown)
-	s.mux.HandleFunc("GET /api/events", s.handleEvents)
+	routes := map[string]http.HandlerFunc{
+		"GET /api/status":                     s.handleStatus,
+		"GET /api/stats":                      s.handleStats,
+		"GET /api/days":                       s.handleDays,
+		"DELETE /api/days/{date}":             s.handleDeleteDay,
+		"GET /api/speakers":                   s.handleSpeakers,
+		"PATCH /api/speakers/{label}":         s.handleSpeakerAlias,
+		"PUT /api/speakers/{label}/merge":     s.handleSpeakerMerge,
+		"GET /api/lexicon":                    s.handleLexicon,
+		"PUT /api/lexicon":                    s.handleLexiconUpdate,
+		"GET /api/settings":                   s.handleSettings,
+		"PUT /api/settings":                   s.handleSettingsUpdate,
+		"GET /api/models":                     s.handleModels,
+		"GET /api/paragraphs":                 s.handleParagraphs,
+		"POST /api/paragraphs/split":          s.handleSplitParagraphs,
+		"POST /api/paragraphs/correct":        s.handleCorrectParagraphs,
+		"POST /api/paragraphs/{id}/correct":   s.handleCorrectParagraph,
+		"POST /api/paragraphs/{id}/asr":       s.handleRetranscribeParagraph,
+		"POST /api/paragraphs/{id}/summarize": s.handleSummarizeParagraph,
+		"PUT /api/capture":                    s.handleCapture,
+		"GET /api/segments":                   s.handleSegments,
+		"GET /api/segments/{id}/audio":        s.handleAudio,
+		"GET /api/markdown":                   s.handleMarkdown,
+		"GET /api/events":                     s.handleEvents,
+	}
+	for pattern, handler := range routes {
+		s.mux.HandleFunc(pattern, handler)
+		s.mux.HandleFunc(versionedPattern(pattern), handler)
+	}
+	s.mux.HandleFunc("GET /health", s.handleHealth)
+	s.mux.HandleFunc("GET /ready", s.handleReady)
+	s.mux.HandleFunc("GET /metrics", s.handleMetrics)
 	if assets != nil {
 		s.mux.Handle("GET /", http.FileServer(http.FS(assets)))
 	}
 	return s
+}
+
+func versionedPattern(pattern string) string {
+	return strings.Replace(pattern, "/api/", "/api/v1/", 1)
 }
 
 func (s *Server) Handler() http.Handler {
@@ -306,6 +320,28 @@ func (s *Server) handleAudio(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, path)
 }
 
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleReady(w http.ResponseWriter, _ *http.Request) {
+	status := s.engine.Status()
+	if status.State == engine.StateStopping {
+		writeError(w, http.StatusServiceUnavailable, "NOT_READY", "服务正在停止")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ready",
+		"state":  status.State,
+	})
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+	observability.DroppedAudioChunks.Set(s.engine.Status().DroppedChunks)
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	observability.Default.WritePrometheus(w)
+}
+
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -317,6 +353,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	events, unsubscribe := s.hub.subscribe()
 	defer unsubscribe()
+	observability.SSEConnections.Inc()
+	defer observability.SSEConnections.Dec()
 	if err := writeSSE(w, "status", s.currentStatus()); err != nil {
 		return
 	}

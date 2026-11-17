@@ -19,6 +19,7 @@
 - 默认接入小米 `mimo-v2.6-flash`，也可配置其他 OpenAI 兼容 API 或本机 LM Studio。模型跨说话人判断完整会议议题，把问答、讨论、决策和行动项归为同一主题，并生成具体名称与简明介绍；寒暄、闲聊、语气词和无信息过渡不进入主题索引。正文逐字拼接，不润色、不改写。每收到一条新的最终语句就立即重判当前段落，不需要等待空闲；启动后后台自动回填全部历史，录音、识别和 SSE 不被阻塞。
 - 段落层写入派生文件 `data/paragraphs.jsonl`，用于 Markdown 预览、主题索引与导出；独立声音记录页逐条展示，每条录音仍可单独回放。说话人变化不会强制切分，单 run 达到 20 段或 3000 字才切分。模型不可用时先按整 run 拼接并暂不生成新主题，后续新语句、下次启动或 `-reparagraph` 会自动重试。
 - 控制台启停麦克风、查看历史、回放和下载录音，查看按天归档并删除整天数据。
+- Web 控制台支持中英文：默认按浏览器语言自动选择（中文环境用中文，其余环境用英文），也可在页面右上角手动切换；选择保存在浏览器本机并跨页面、跨重启沿用。
 - 首页中间实时合并转录为 Markdown 文稿预览，正在识别的临时文本也会即时跟随；可隐藏，并支持下载完整 `.md` 文件。“按主题分段”可用当前模型重新划分最近 500 条记录；每个派生段落都有“语义修正”“ASR”和“总结”按钮：语义修正只改派生文本；ASR 用当前选择的本地 / MiMo 模型重新识别该段全部录音，并同步更新原始逐句转写与该段落，任一录音不可用时整段不改；总结调用当前段落模型生成独立摘要并显示在正文下方，不改写原文或主题简介。右侧主题可点击跳转到对应文稿段落。最右侧按时间列出有讨论价值的议题名称与简明介绍，声音记录通过独立页面查看。
 - 默认语音识别和存储都在本机，不上传音频。只有明确选择 MiMo ASR 后才上传最终 WAV 分段；议题分析和语义修正会把转写文本发送到所配置的模型 API，默认使用小米 MiMo，可改回本机 LM Studio。
 - 服务重启后恢复最近历史；磁盘上的 JSONL 和音频不会被启动过程清空。
@@ -70,6 +71,7 @@ go build -o bin/diting ./cmd/diting
 -asr local              最终语音识别：local 或 mimo（mimo-v2.5-asr）
 -merge=true             启用异步议题切分；false 时 Markdown 退回逐条格式
 -reparagraph            用现有转写全量重建段落层后退出
+-restore-day DATE       从最新快照恢复某天转写（YYYY-MM-DD），音频需从废纸篓手动拖回
 -eval-speakers          用测试集评估声纹模型后退出
 -export-testset         从已标注录音导出测试集后退出
 -testset FILE           测试集 JSONL 路径，默认 <data>/testset.jsonl
@@ -84,6 +86,7 @@ DITING_AUDIO_FORMAT=wav|m4a   强制新录音格式，默认有 afconvert 时用
 DITING_TRASH_DIR=DIR          按天删除时使用的废纸篓目录，默认 ~/.Trash
 DITING_LLM_API_KEY=KEY        模型 API 凭证，优先级最高
 MIMO_API_KEY=KEY              小米模型 API 凭证，优先级次之
+DITING_LOG_LEVEL=LEVEL        日志级别：debug、info、warn、error，默认 info
 ```
 
 议题分析默认调用 Token Plan 端点 `https://token-plan-cn.xiaomimimo.com/v1`，模型为 `mimo-v2.6-flash`。未显式传入 `-llm-api-key` 时，依次读取 `DITING_LLM_API_KEY`、`MIMO_API_KEY`、`~/code/keys/xiaomi`、`~/.config/opencode/opencode.json` 的 `provider.mimo.apiKey` 和旧版 `~/.local/share/opencode/auth.json` 中已有的 Xiaomi 凭证；凭证只用于请求头，不写入 `data/settings.json`、页面或日志。请求同时发送小米要求的 `api-key` 头和通用的 `Authorization: Bearer` 头。
@@ -235,9 +238,11 @@ updatedAt   最近写入时间
 
 按天删除的语义：
 
+- 删除前把当天转写快照保存到 `data/backups/YYYYMMDD-HHMMSS/transcripts.jsonl`。
 - 先原子重写 `transcripts.jsonl` 去掉当天记录，并删除与这些记录相交的派生段落；随后把 `audio/YYYYMMDD` 整个目录移到 `~/.Trash`（可用 `DITING_TRASH_DIR` 覆盖），目录名为 `diting-YYYYMMDD-HHMMSS`。
-- 跨卷时自动退化为复制后删除源目录；不写入 Finder 的“放回原处”元数据，恢复需手动从废纸篓拖回。
+- 跨卷时自动退化为复制后删除源目录；不写入 Finder 的“放回原处”元数据，音频恢复需手动从废纸篓拖回。
 - 若录音目录移动失败，转写已删除，占用空间会以孤儿音频的形式继续显示在日历中，可再次删除该天重试。
+- 执行 `./bin/diting -restore-day YYYY-MM-DD` 可从最新快照恢复转写文本；已存在的分段 ID 会跳过，音频需手动从废纸篓拖回对应目录。
 - 删除不回收 `speakers.json` 中的声纹档案与别名，`count` 可能偏大，但不影响匹配与显示。
 
 同一数据目录只允许一个进程使用（`data/.lock`）。服务运行期间执行 `-retranscribe` 会被拒绝，请先停止服务。
@@ -246,9 +251,10 @@ updatedAt   最近写入时间
 
 ```text
 GET /api/status
-GET /api/stats               全量统计：录音数、总大小、转写字数
-GET /api/days                按天统计：段数、字数、录音数、占用
+GET /api/stats               全量统计：录音数、总大小、转写字数（带缓存）
+GET /api/days                按天统计：段数、字数、录音数、占用（带缓存）
 DELETE /api/days/{date}      删除某天转写，并把 audio/YYYYMMDD 移到废纸篓
+                             支持 ?dryRun=1 预览影响面；删除前自动快照到 data/backups/
 GET /api/settings            当前段落模型、语义修正与 ASR 选择
 PUT /api/settings            {"model":"mimo-v2.6-flash","correct":false,"asr":"local|mimo"}
 GET /api/models              当前 OpenAI 兼容端点的模型列表
@@ -268,7 +274,12 @@ POST /api/paragraphs/{id}/correct 只手动修正指定段落
 POST /api/paragraphs/{id}/asr 用当前 ASR 重新识别指定段落的全部录音
 POST /api/paragraphs/{id}/summarize 用当前段落模型生成独立摘要
 GET /api/events              SSE: status / interim / segment / paragraph / archive / error
+GET /health                  存活探针
+GET /ready                   就绪探针
+GET /metrics                 Prometheus 格式指标
 ```
+
+所有 `/api/` 端点同时暴露在 `/api/v1/` 前缀下，两者行为一致；新消费者应使用 `/api/v1/`。OpenAPI 3.0 契约见 `api/openapi.yaml`。
 
 `/api/stats` 从 `transcripts.jsonl` 与 `data/audio` 汇总，覆盖全部历史而非最近 500 条窗口；结果缓存 3 秒，新分段写入后控制台会自动刷新。
 

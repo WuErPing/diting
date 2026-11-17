@@ -38,6 +38,9 @@ type Store struct {
 	lock *os.File
 	mu   sync.RWMutex
 	log  []Segment
+
+	statsCache *Stats
+	daysCache  []DayStat
 }
 
 func Open(root string) (*Store, error) {
@@ -132,6 +135,8 @@ func (s *Store) Save(segment Segment, samples []float32) (Segment, error) {
 
 	s.log = append(s.log, segment)
 	s.log = trimHistory(s.log)
+	s.statsCache = nil
+	s.daysCache = nil
 	return segment, nil
 }
 
@@ -189,6 +194,8 @@ func (s *Store) rewriteLocked(segments []Segment) error {
 	}
 
 	s.log = trimHistory(segments)
+	s.statsCache = nil
+	s.daysCache = nil
 	return nil
 }
 
@@ -219,6 +226,28 @@ type Stats struct {
 }
 
 func (s *Store) Stats() (Stats, error) {
+	s.mu.RLock()
+	if s.statsCache != nil {
+		stats := *s.statsCache
+		s.mu.RUnlock()
+		return stats, nil
+	}
+	s.mu.RUnlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.statsCache != nil {
+		return *s.statsCache, nil
+	}
+	stats, err := s.computeStatsLocked()
+	if err != nil {
+		return Stats{}, err
+	}
+	s.statsCache = &stats
+	return stats, nil
+}
+
+func (s *Store) computeStatsLocked() (Stats, error) {
 	segments, err := readTranscripts(filepath.Join(s.root, transcriptFile))
 	if err != nil {
 		return Stats{}, err
@@ -261,20 +290,29 @@ type DayStat struct {
 	AudioBytes int64  `json:"audioBytes"`
 }
 
-// DayDelete reports what a DeleteDay call removed.
-type DayDelete struct {
-	Date       string   `json:"date"`
-	Segments   int      `json:"segments"`
-	AudioFiles int      `json:"audioFiles"`
-	AudioBytes int64    `json:"audioBytes"`
-	TrashPath  string   `json:"trashPath,omitempty"`
-	SegmentIDs []string `json:"-"`
-}
-
 func (s *Store) Days() ([]DayStat, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	if s.daysCache != nil {
+		days := append([]DayStat(nil), s.daysCache...)
+		s.mu.RUnlock()
+		return days, nil
+	}
+	s.mu.RUnlock()
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.daysCache != nil {
+		return append([]DayStat(nil), s.daysCache...), nil
+	}
+	days, err := s.computeDaysLocked()
+	if err != nil {
+		return nil, err
+	}
+	s.daysCache = days
+	return append([]DayStat(nil), days...), nil
+}
+
+func (s *Store) computeDaysLocked() ([]DayStat, error) {
 	segments, err := readTranscripts(filepath.Join(s.root, transcriptFile))
 	if err != nil {
 		return nil, err
@@ -330,10 +368,23 @@ func (s *Store) Days() ([]DayStat, error) {
 	return days, nil
 }
 
+// DayDelete reports what a DeleteDay call removed.
+type DayDelete struct {
+	Date       string   `json:"date"`
+	Segments   int      `json:"segments"`
+	AudioFiles int      `json:"audioFiles"`
+	AudioBytes int64    `json:"audioBytes"`
+	TrashPath  string   `json:"trashPath,omitempty"`
+	Snapshot   string   `json:"snapshot,omitempty"`
+	DryRun     bool     `json:"dryRun,omitempty"`
+	SegmentIDs []string `json:"-"`
+}
+
 // DeleteDay removes one local day's transcripts and moves its audio directory
-// to the Trash. The transcript rewrite happens before the audio move so a
-// partial failure leaves audio visible as an orphan day that can be retried.
-func (s *Store) DeleteDay(date string) (DayDelete, error) {
+// to the Trash. When dryRun is true it only reports the impact without
+// modifying any files. A real deletion writes a snapshot of the removed
+// transcripts under data/backups so the text can be restored later.
+func (s *Store) DeleteDay(date string, dryRun bool) (DayDelete, error) {
 	parsed, err := time.ParseInLocation("2006-01-02", date, time.Local)
 	if err != nil || parsed.Format("2006-01-02") != date {
 		return DayDelete{}, fmt.Errorf("invalid date %q", date)
@@ -347,28 +398,45 @@ func (s *Store) DeleteDay(date string) (DayDelete, error) {
 		return DayDelete{}, err
 	}
 	keep := make([]Segment, 0, len(segments))
-	result := DayDelete{Date: date}
+	removed := make([]Segment, 0)
+	result := DayDelete{Date: date, DryRun: dryRun}
 	for _, segment := range segments {
 		if segment.StartedAt.Local().Format("2006-01-02") == date {
 			result.Segments++
 			result.SegmentIDs = append(result.SegmentIDs, segment.ID)
+			removed = append(removed, segment)
 			continue
 		}
 		keep = append(keep, segment)
+	}
+	dayDir := filepath.Join(s.root, audioDir, parsed.Format("20060102"))
+	if _, err := os.Stat(dayDir); err == nil {
+		result.AudioFiles, result.AudioBytes, err = audioDirStats(dayDir)
+		if err != nil {
+			return result, err
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return result, err
+	}
+	if dryRun {
+		return result, nil
+	}
+
+	if len(removed) > 0 {
+		snapshotDir, err := s.writeDaySnapshotLocked(parsed, removed)
+		if err != nil {
+			return DayDelete{}, fmt.Errorf("write deletion snapshot: %w", err)
+		}
+		result.Snapshot = snapshotDir
 	}
 	if err := s.rewriteLocked(keep); err != nil {
 		return DayDelete{}, err
 	}
 
-	dayDir := filepath.Join(s.root, audioDir, parsed.Format("20060102"))
 	if _, err := os.Stat(dayDir); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return result, nil
 		}
-		return result, err
-	}
-	result.AudioFiles, result.AudioBytes, err = audioDirStats(dayDir)
-	if err != nil {
 		return result, err
 	}
 	destination, err := moveDirToTrash(dayDir, "diting-"+parsed.Format("20060102")+"-"+time.Now().Format("150405"))
@@ -377,6 +445,121 @@ func (s *Store) DeleteDay(date string) (DayDelete, error) {
 		return result, fmt.Errorf("move audio to trash: %w", err)
 	}
 	return result, nil
+}
+
+// RestoreResult reports how many segments were restored from a snapshot.
+type RestoreResult struct {
+	Date     string `json:"date"`
+	Restored int    `json:"restored"`
+	Skipped  int    `json:"skipped"`
+	Snapshot string `json:"snapshot"`
+}
+
+// RestoreDay merges the latest snapshot for date back into transcripts.jsonl.
+// Segments whose IDs already exist are skipped so the operation is idempotent.
+// Audio files are not moved automatically; if the audio directory was moved to
+// Trash it must be dragged back manually before playback is possible.
+func (s *Store) RestoreDay(date string) (RestoreResult, error) {
+	parsed, err := time.ParseInLocation("2006-01-02", date, time.Local)
+	if err != nil || parsed.Format("2006-01-02") != date {
+		return RestoreResult{}, fmt.Errorf("invalid date %q", date)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	snapshotDir, err := s.latestSnapshotLocked(parsed)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	snapshotSegments, err := readTranscripts(filepath.Join(snapshotDir, transcriptFile))
+	if err != nil {
+		return RestoreResult{}, fmt.Errorf("read snapshot: %w", err)
+	}
+	current, err := readTranscripts(filepath.Join(s.root, transcriptFile))
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	existing := make(map[string]struct{}, len(current))
+	for _, segment := range current {
+		existing[segment.ID] = struct{}{}
+	}
+	result := RestoreResult{Date: date, Snapshot: snapshotDir}
+	merged := append([]Segment(nil), current...)
+	for _, segment := range snapshotSegments {
+		if _, ok := existing[segment.ID]; ok {
+			result.Skipped++
+			continue
+		}
+		merged = append(merged, segment)
+		result.Restored++
+	}
+	if result.Restored == 0 {
+		return result, nil
+	}
+	sort.SliceStable(merged, func(i, j int) bool {
+		return merged[i].StartedAt.Before(merged[j].StartedAt)
+	})
+	if err := s.rewriteLocked(merged); err != nil {
+		return RestoreResult{}, err
+	}
+	return result, nil
+}
+
+func (s *Store) latestSnapshotLocked(day time.Time) (string, error) {
+	backupRoot := filepath.Join(s.root, "backups")
+	entries, err := os.ReadDir(backupRoot)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("no snapshots found for %s", day.Format("2006-01-02"))
+	}
+	if err != nil {
+		return "", fmt.Errorf("read backups: %w", err)
+	}
+	prefix := day.Format("20060102") + "-"
+	var candidates []string
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), prefix) {
+			candidates = append(candidates, entry.Name())
+		}
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no snapshots found for %s", day.Format("2006-01-02"))
+	}
+	sort.Strings(candidates)
+	return filepath.Join(backupRoot, candidates[len(candidates)-1]), nil
+}
+
+func (s *Store) writeDaySnapshotLocked(day time.Time, segments []Segment) (string, error) {
+	backupRoot := filepath.Join(s.root, "backups")
+	snapshotDir := filepath.Join(backupRoot, day.Format("20060102")+"-"+time.Now().Format("150405"))
+	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
+		return "", fmt.Errorf("create snapshot directory: %w", err)
+	}
+	path := filepath.Join(snapshotDir, transcriptFile)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return "", fmt.Errorf("create snapshot transcript: %w", err)
+	}
+	writer := bufio.NewWriter(file)
+	encoder := json.NewEncoder(writer)
+	for _, segment := range segments {
+		if err := encoder.Encode(segment); err != nil {
+			_ = file.Close()
+			return "", fmt.Errorf("encode snapshot segment: %w", err)
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		_ = file.Close()
+		return "", fmt.Errorf("flush snapshot: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return "", fmt.Errorf("sync snapshot: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("close snapshot: %w", err)
+	}
+	return snapshotDir, nil
 }
 
 func audioDay(path string) (string, bool) {

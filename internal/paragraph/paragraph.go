@@ -231,20 +231,20 @@ func isASCIIWord(r rune) bool {
 // Overlapping, reversed or out-of-range groups are still errors.
 func NormalizeGroups(groups []Group, n int) ([]Group, bool, error) {
 	if n <= 0 {
-		return nil, false, fmt.Errorf("没有可划分的语句")
+		return nil, false, fmt.Errorf("no sentences to group")
 	}
 	if len(groups) == 0 {
-		return nil, false, fmt.Errorf("段落划分为空")
+		return nil, false, fmt.Errorf("grouping is empty")
 	}
 	repaired := make([]Group, len(groups))
 	expected := 1
 	changed := false
 	for i, group := range groups {
 		if group.End < group.Start || group.End > n {
-			return nil, false, fmt.Errorf("段落 %d 范围 %d-%d 无效", i+1, group.Start, group.End)
+			return nil, false, fmt.Errorf("paragraph %d has invalid range %d-%d", i+1, group.Start, group.End)
 		}
 		if group.Start < expected {
-			return nil, false, fmt.Errorf("段落 %d 起点为 %d，与已覆盖范围重叠", i+1, group.Start)
+			return nil, false, fmt.Errorf("paragraph %d starts at %d, overlapping the covered range", i+1, group.Start)
 		}
 		if group.Start > expected {
 			group.Start = expected

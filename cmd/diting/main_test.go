@@ -6,6 +6,15 @@ import (
 	"testing"
 )
 
+func TestASRModelName(t *testing.T) {
+	if got := asrModelName("local"); got != "local" {
+		t.Fatalf("local ASR model = %q", got)
+	}
+	if got := asrModelName("mimo"); got != "mimo-v2.5-asr" {
+		t.Fatalf("MiMo ASR model = %q", got)
+	}
+}
+
 func TestReadOpenCodeAPIKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.json")
 	if err := os.WriteFile(path, []byte(`{"xiaomi":{"type":"api","key":"mimo-secret"},"other":{"key":"other-secret"}}`), 0o600); err != nil {

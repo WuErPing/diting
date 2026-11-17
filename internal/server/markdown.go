@@ -54,15 +54,16 @@ func (s *Server) handleMarkdown(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "MARKDOWN_FAILED", "无法生成合并文稿")
 		return
 	}
+	locale := r.URL.Query().Get("lang")
 	for i := range segments {
-		segments[i].Speaker = s.speakerName(segments[i].Speaker)
+		segments[i].Speaker = localizedSpeakerName(s.speakerName(segments[i].Speaker), locale)
 	}
 
 	var paragraphs []paragraph.Paragraph
 	if s.merge && s.paragraphs != nil {
 		paragraphs = s.paragraphs.All()
 		for i := range paragraphs {
-			paragraphs[i].Speaker = s.speakerName(paragraphs[i].Speaker)
+			paragraphs[i].Speaker = localizedSpeakerName(s.speakerName(paragraphs[i].Speaker), locale)
 		}
 	}
 
@@ -71,7 +72,14 @@ func (s *Server) handleMarkdown(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("download") == "1" {
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "diting-"+now.Format("20060102-150405")+".md"))
 	}
-	_, _ = w.Write([]byte(buildMarkdownOnDate(segments, paragraphs, len(segments), limit, now, date)))
+	_, _ = w.Write([]byte(buildMarkdownOnDate(segments, paragraphs, len(segments), limit, now, date, locale)))
+}
+
+func localizedSpeakerName(name, locale string) string {
+	if locale == "en" && speakerLabelPattern.MatchString(name) {
+		return "Speaker " + strings.TrimPrefix(name, "说话人")
+	}
+	return name
 }
 
 type markdownItem struct {
@@ -90,11 +98,42 @@ func buildMarkdown(segments []store.Segment, paragraphs []paragraph.Paragraph, t
 	return buildMarkdownOnDate(segments, paragraphs, total, limit, now, "")
 }
 
-func buildMarkdownOnDate(segments []store.Segment, paragraphs []paragraph.Paragraph, total, limit int, now time.Time, date string) string {
+type markdownText struct {
+	title    string
+	empty    string
+	rangeTo  string
+	count    string
+	latest   string
+	exported string
+	noText   string
+	summary  string
+}
+
+func localizedMarkdownText(locale string) markdownText {
+	if locale == "en" {
+		return markdownText{
+			title: "# Diting transcript\n\n", empty: "> No records yet.\n",
+			rangeTo: " to ", count: " · %d records", latest: " · Showing the latest %d records",
+			exported: " · Exported at %s\n", noText: "(No text recognized)", summary: "> Summary: ",
+		}
+	}
+	return markdownText{
+		title: "# 谛听转录\n\n", empty: "> 暂无记录。\n",
+		rangeTo: " 至 ", count: " · 共 %d 条", latest: "，此处显示最近 %d 条",
+		exported: " · 导出于 %s\n", noText: "（未识别出文字）", summary: "> 总结：",
+	}
+}
+
+func buildMarkdownOnDate(segments []store.Segment, paragraphs []paragraph.Paragraph, total, limit int, now time.Time, date string, locales ...string) string {
+	locale := ""
+	if len(locales) > 0 {
+		locale = locales[0]
+	}
+	text := localizedMarkdownText(locale)
 	var b strings.Builder
-	b.WriteString("# 谛听转录\n\n")
+	b.WriteString(text.title)
 	if total == 0 {
-		b.WriteString("> 暂无记录。\n")
+		b.WriteString(text.empty)
 		return b.String()
 	}
 
@@ -113,17 +152,18 @@ func buildMarkdownOnDate(segments []store.Segment, paragraphs []paragraph.Paragr
 		total = len(items)
 	}
 	if len(items) == 0 {
-		b.WriteString("> 暂无记录。\n")
+		b.WriteString(text.empty)
 		return b.String()
 	}
 
 	first := items[0].start().Local()
 	last := items[len(items)-1].start().Local()
-	fmt.Fprintf(&b, "> %s 至 %s · 共 %d 条", first.Format("2006-01-02 15:04"), last.Format("2006-01-02 15:04"), total)
+	fmt.Fprintf(&b, "> %s%s%s", first.Format("2006-01-02 15:04"), text.rangeTo, last.Format("2006-01-02 15:04"))
+	fmt.Fprintf(&b, text.count, total)
 	if limit > 0 && limit < total {
-		fmt.Fprintf(&b, "，此处显示最近 %d 条", limit)
+		fmt.Fprintf(&b, text.latest, limit)
 	}
-	fmt.Fprintf(&b, " · 导出于 %s\n", now.Local().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&b, text.exported, now.Local().Format("2006-01-02 15:04:05"))
 
 	currentDate := ""
 	for _, item := range items {
@@ -133,15 +173,15 @@ func buildMarkdownOnDate(segments []store.Segment, paragraphs []paragraph.Paragr
 			currentDate = date
 		}
 		if item.paragraph != nil {
-			writeParagraph(&b, item.paragraph)
+			writeParagraph(&b, item.paragraph, text)
 			continue
 		}
-		writeSegment(&b, item.segment)
+		writeSegment(&b, item.segment, text)
 	}
 	return b.String()
 }
 
-func writeParagraph(b *strings.Builder, p *paragraph.Paragraph) {
+func writeParagraph(b *strings.Builder, p *paragraph.Paragraph, localized markdownText) {
 	start := p.StartedAt.Local().Format("15:04:05")
 	end := p.EndedAt.Local().Format("15:04:05")
 	if start == end {
@@ -154,18 +194,18 @@ func writeParagraph(b *strings.Builder, p *paragraph.Paragraph) {
 	}
 	text := strings.TrimSpace(p.Text)
 	if text == "" {
-		text = "（未识别出文字）"
+		text = localized.noText
 	}
 	b.WriteString(" · " + escapeMarkdown(text) + "\n")
 	if digest := strings.TrimSpace(p.Digest); digest != "" {
-		b.WriteString("> 总结：" + escapeMarkdown(digest) + "\n")
+		b.WriteString(localized.summary + escapeMarkdown(digest) + "\n")
 	}
 }
 
-func writeSegment(b *strings.Builder, segment *store.Segment) {
+func writeSegment(b *strings.Builder, segment *store.Segment, localized markdownText) {
 	text := strings.TrimSpace(segment.Text)
 	if text == "" {
-		text = "（未识别出文字）"
+		text = localized.noText
 	}
 	fmt.Fprintf(b, "- **%s**", segment.StartedAt.Local().Format("15:04:05"))
 	if segment.Speaker != "" {

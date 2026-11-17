@@ -69,7 +69,7 @@ func (e *Engine) Start(ctx context.Context) error {
 - `GET /api/status`：返回监听状态、启动时间、分段数和最近错误。
 - `GET /api/stats`：返回全量归档统计（音频文件数、总字节数、转写记录数和字符数），覆盖完整历史并短暂缓存。
 - `GET /api/days`：按本地日期返回段数、字数、音频文件数和字节数；包含没有转写记录的孤儿音频。
-- `DELETE /api/days/{date}`：校验 `YYYY-MM-DD` 与同源请求；删除当天转写及相交段落，把 `audio/YYYYMMDD` 移到废纸篓；返回删除计数、废纸篓路径，并广播 SSE `archive`。
+- `DELETE /api/days/{date}?dryRun=1`：校验 `YYYY-MM-DD` 与同源请求；`dryRun` 时只返回影响面预览。真实删除前把当天转写快照写入 `data/backups/`，随后删除当天转写及相交段落，把 `audio/YYYYMMDD` 移到废纸篓；返回删除计数、废纸篓路径、快照路径，并广播 SSE `archive`。
 - `GET /api/settings`：返回当前段落模型、语义修正开关与 ASR 选择；`PUT /api/settings` 接收 `{"model":"mimo-v2.6-flash","correct":false,"asr":"local|mimo"}` 并原子持久化，实时应用后续识别与段落处理。
 - `GET /api/models`：返回当前 OpenAI 兼容端点的模型 ID 列表。
 - `GET /api/speakers`：返回说话人稳定标签、显示名、计数与更新时间。
@@ -86,6 +86,10 @@ func (e *Engine) Start(ctx context.Context) error {
 - `POST /api/paragraphs/{id}/asr`：用当前选择的本地 / MiMo ASR 重新识别指定段落的全部录音，原子更新原始逐句转写，再按原边界刷新该派生段落；任一录音缺失或解码失败则整段不改，返回录音数与文本变更数。
 - `POST /api/paragraphs/{id}/summarize`：用当前段落模型总结指定段落，把独立摘要保存到 `digest` 并显示在正文下方；不改写原始转写、段落正文、议题名称或主题简介。右侧主题链接按段落 ID 滚动定位并高亮对应文稿。
 - `GET /api/events`：SSE，事件为 `status`、`interim`、`segment`、`paragraph`、`archive`、`error`；`segment` 携带 `speakerName`，`paragraph` 只携带段落元信息，不携带正文。
+- `GET /health`：存活探针，返回 `{"status":"ok"}`。
+- `GET /ready`：就绪探针，停止中返回 503，否则返回当前状态。
+- `GET /metrics`：Prometheus 文本格式指标，包含分段保存数、LLM 请求/失败数、SSE 连接数、音频丢弃数等。
+- 所有 `/api/` 端点同时暴露在 `/api/v1/` 前缀下；新消费者应使用 `/api/v1/`。OpenAPI 3.0 契约见 `api/openapi.yaml`。
 - 错误统一为 `{"error":{"code":"...","message":"..."}}`。
 
 ## Boundaries

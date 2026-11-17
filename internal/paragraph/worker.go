@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"diting/internal/observability"
 	"diting/internal/store"
 )
 
@@ -405,6 +406,7 @@ func (w *Worker) process(ctx context.Context, job job) {
 	if len(run) == 0 {
 		return
 	}
+	model := w.currentModel()
 
 	source := SourceSingle
 	groups := FallbackGroups(len(run))
@@ -415,8 +417,13 @@ func (w *Worker) process(ctx context.Context, job job) {
 		texts := promptTexts(run, w.speakerResolve)
 		start := w.clock.Now()
 		callCtx, cancel := context.WithTimeout(ctx, requestDeadline)
+		observability.LLMRequests.Inc()
 		result, err := w.opts.Grouper.Group(callCtx, texts)
 		cancel()
+		observability.LLMDuration.Observe(w.clock.Now().Sub(start))
+		if err != nil {
+			observability.LLMFailures.Inc()
+		}
 		if err == nil {
 			var changed bool
 			result, changed, err = normalizeGroups(result, len(texts))
@@ -432,8 +439,8 @@ func (w *Worker) process(ctx context.Context, job job) {
 			if !errors.Is(err, ErrInvalidGrouping) {
 				w.recordFailure()
 			}
-			w.opts.Logf("段落切分失败，改用整段拼接: segments=%d chars=%d elapsed=%s err=%v",
-				len(run), runChars(run), w.clock.Now().Sub(start).Round(time.Millisecond), err)
+			w.opts.Logf("Paragraph splitting failed; falling back to concatenation: model=%s segments=%d chars=%d elapsed=%s err=%v",
+				model, len(run), runChars(run), w.clock.Now().Sub(start).Round(time.Millisecond), err)
 		} else {
 			source = SourceLLM
 			groups = result
@@ -441,7 +448,7 @@ func (w *Worker) process(ctx context.Context, job job) {
 		}
 	}
 
-	paragraphs := ComposeParagraphs(run, groups, source, w.currentModel(), w.clock.Now(), w.speakerResolve)
+	paragraphs := ComposeParagraphs(run, groups, source, model, w.clock.Now(), w.speakerResolve)
 	if w.opts.Corrector != nil && w.correctionEnabled() && job.final && !w.cooling() {
 		w.correctParagraphs(ctx, paragraphs)
 	}
@@ -449,8 +456,9 @@ func (w *Worker) process(ctx context.Context, job job) {
 		w.opts.Logf("保存段落失败: %v", err)
 		return
 	}
+	observability.ParagraphsSaved.Add(uint64(len(paragraphs)))
 	if w.llmCalls > 0 && w.llmCalls%20 == 0 && source == SourceLLM {
-		w.opts.Logf("段落合并进度: 已调用模型 %d 次", w.llmCalls)
+		w.opts.Logf("Paragraph merge progress: model=%s calls=%d", model, w.llmCalls)
 	}
 	for _, paragraph := range paragraphs {
 		w.fire(paragraph)
@@ -866,6 +874,7 @@ func Rebuild(ctx context.Context, paragraphStore *Store, segments []store.Segmen
 	if err := paragraphStore.Replace(paragraphs); err != nil {
 		return stats, err
 	}
+	observability.ParagraphsSaved.Add(uint64(len(paragraphs)))
 	stats.Paragraphs = len(paragraphs)
 	return stats, nil
 }
@@ -883,13 +892,17 @@ func composeRun(ctx context.Context, run []store.Segment, grouper Grouper, corre
 	}
 	if grouper != nil && !*cooling {
 		texts := promptTexts(run, resolve)
+		start := clock.Now()
 		callCtx, cancel := context.WithTimeout(ctx, requestDeadline)
+		observability.LLMRequests.Inc()
 		result, err := grouper.Group(callCtx, texts)
 		cancel()
+		observability.LLMDuration.Observe(clock.Now().Sub(start))
 		if err == nil {
 			result, _, err = normalizeGroups(result, len(texts))
 		}
 		if err != nil {
+			observability.LLMFailures.Inc()
 			if ctx.Err() != nil {
 				return nil, source, ctx.Err()
 			}

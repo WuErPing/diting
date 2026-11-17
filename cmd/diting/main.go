@@ -22,6 +22,7 @@ import (
 
 	"diting/internal/engine"
 	"diting/internal/lexicon"
+	"diting/internal/observability"
 	"diting/internal/paragraph"
 	"diting/internal/server"
 	"diting/internal/speaker"
@@ -47,12 +48,14 @@ type config struct {
 	reparagraph      bool
 	recent           int
 	dryRun           bool
+	restoreDay       string
 	evalSpeakers     bool
 	exportTestset    bool
 	testsetPath      string
 }
 
 func main() {
+	observability.Init(os.Getenv("DITING_LOG_LEVEL"))
 	cfg := config{}
 	flag.StringVar(&cfg.models, "models", "models", "model directory")
 	flag.StringVar(&cfg.data, "data", "data", "recording and transcript directory")
@@ -71,6 +74,7 @@ func main() {
 	flag.BoolVar(&cfg.reparagraph, "reparagraph", false, "rebuild paragraphs from existing transcripts and exit")
 	flag.IntVar(&cfg.recent, "recent", 0, "with -reparagraph -dry-run, preview runs covering the most recent N segments")
 	flag.BoolVar(&cfg.dryRun, "dry-run", false, "with -reparagraph -recent N, print before/after without writing")
+	flag.StringVar(&cfg.restoreDay, "restore-day", "", "restore the latest snapshot for a day (YYYY-MM-DD) and exit")
 	flag.BoolVar(&cfg.evalSpeakers, "eval-speakers", false, "evaluate speaker model against test set and exit")
 	flag.BoolVar(&cfg.exportTestset, "export-testset", false, "export annotated segments as speaker test set and exit")
 	flag.StringVar(&cfg.testsetPath, "testset", "", "test set JSONL path (default: <data>/testset.jsonl)")
@@ -97,6 +101,9 @@ func run(cfg config) error {
 	}
 	if cfg.reparagraph {
 		return reparagraph(cfg)
+	}
+	if cfg.restoreDay != "" {
+		return restoreDay(cfg)
 	}
 	if cfg.evalSpeakers {
 		return evalSpeakers(cfg)
@@ -187,6 +194,11 @@ func run(cfg config) error {
 			return err
 		}
 	}
+	asrProvider := cfg.asrProvider
+	if settings != nil {
+		asrProvider = settings.Snapshot().ASR
+	}
+	log.Printf("ASR 模型: %s", asrModelName(asrProvider))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -321,6 +333,13 @@ func modelPaths(cfg config) engine.ModelPaths {
 	paths := engine.DefaultModelPaths(cfg.models)
 	paths.Speaker = cfg.speakerModel
 	return paths
+}
+
+func asrModelName(provider string) string {
+	if provider == engine.ASRProviderMiMo {
+		return engine.DefaultMiMoASRModel
+	}
+	return provider
 }
 
 func engineOptions(cfg config, lex *lexicon.Lexicon, onUsage func(model string, usage json.RawMessage, durationMs int64)) engine.Options {
@@ -581,6 +600,23 @@ func loadSpeakerMerges(path string) map[string]string {
 		}
 	}
 	return merges
+}
+
+func restoreDay(cfg config) error {
+	segmentStore, err := store.Open(cfg.data)
+	if err != nil {
+		return err
+	}
+	defer segmentStore.Close()
+	result, err := segmentStore.RestoreDay(cfg.restoreDay)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("恢复完成: 日期=%s 恢复=%d 跳过=%d 快照=%s\n", result.Date, result.Restored, result.Skipped, result.Snapshot)
+	if result.Restored > 0 {
+		fmt.Println("提示：录音文件仍需从废纸篓手动拖回 data/audio/ 对应目录后才能回放。")
+	}
+	return nil
 }
 
 func evalSpeakers(cfg config) error {

@@ -6,6 +6,7 @@ import (
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/v2/sherpa_onnx"
 
+	"diting/internal/observability"
 	"diting/internal/store"
 )
 
@@ -136,6 +137,7 @@ func (s *captureSession) finishReady(current *utterance) *utterance {
 		samples = append(samples, current.preRoll[:lead]...)
 		samples = append(samples, segment.Samples...)
 		onlineText := strings.TrimSpace(s.recognizer.GetResult(s.stream).Text)
+		saveStart := time.Now()
 		text := s.engine.refineWithAlternatives(samples, onlineText, s.engine.secondaryTranscript(samples))
 		speakerLabel := s.engine.IdentifySamples(samples, sampleDuration(len(samples)))
 		saved, err := s.store.Save(store.Segment{
@@ -145,6 +147,7 @@ func (s *captureSession) finishReady(current *utterance) *utterance {
 			Text:      text,
 			Speaker:   speakerLabel,
 		}, samples)
+		observability.SegmentSaveDuration.Observe(time.Since(saveStart))
 		if err != nil {
 			s.engine.setError(err)
 		} else {

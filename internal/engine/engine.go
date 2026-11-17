@@ -12,6 +12,7 @@ import (
 
 	"diting/internal/audio"
 	"diting/internal/lexicon"
+	"diting/internal/observability"
 	"diting/internal/speaker"
 	"diting/internal/store"
 )
@@ -196,6 +197,7 @@ func (e *Engine) Start() error {
 		StartedAt:    &now,
 		SegmentCount: e.status.SegmentCount,
 	})
+	observability.CaptureState.Set(1)
 	go session.run()
 	return nil
 }
@@ -208,6 +210,7 @@ func (e *Engine) Stop() {
 	}
 
 	e.setStatus(Status{State: StateStopping, SegmentCount: e.status.SegmentCount})
+	observability.CaptureState.Set(2)
 	session := e.session
 	e.capture.Close()
 	close(session.pcm)
@@ -215,6 +218,7 @@ func (e *Engine) Stop() {
 	e.capture = nil
 	e.session = nil
 	e.setStatus(Status{State: StateStopped, SegmentCount: e.status.SegmentCount})
+	observability.CaptureState.Set(0)
 }
 
 func (e *Engine) Close() {
@@ -379,6 +383,7 @@ func (e *Engine) segmentSaved() {
 	e.status.SegmentCount++
 	e.status.LastError = ""
 	e.mu.Unlock()
+	observability.SegmentsSaved.Inc()
 }
 
 func (e *Engine) publish(event Event) {

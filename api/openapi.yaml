@@ -1,0 +1,595 @@
+openapi: 3.0.3
+info:
+  title: Diting Local Console API
+  version: 1.0.0
+  description: |
+    谛听本机语音记录控制台的 HTTP API。所有端点仅绑定回环地址，
+    写操作要求同源请求。当前版本同时暴露 /api/ 与 /api/v1/ 前缀，
+    两者行为一致；新消费者应使用 /api/v1/。
+servers:
+  - url: http://127.0.0.1:8080/api/v1
+    description: 本机回环地址
+paths:
+  /status:
+    get:
+      summary: 获取运行状态
+      responses:
+        '200':
+          description: 当前监听状态与统计
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+  /stats:
+    get:
+      summary: 全量归档统计
+      responses:
+        '200':
+          description: 录音数、总大小、转写字数
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatsResponse'
+  /days:
+    get:
+      summary: 按天归档统计
+      responses:
+        '200':
+          description: 每天的段数、字数、录音数与占用
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  days:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DayStat'
+  /days/{date}:
+    delete:
+      summary: 删除某天数据（支持 dry-run）
+      parameters:
+        - name: date
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+        - name: dryRun
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: 为 true 时只返回影响面预览，不实际删除
+      responses:
+        '200':
+          description: 删除结果或预览
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DayDeleteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /speakers:
+    get:
+      summary: 说话人列表
+      responses:
+        '200':
+          description: 稳定标签、显示名与计数
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SpeakerView'
+  /speakers/{label}:
+    patch:
+      summary: 设置说话人别名
+      parameters:
+        - name: label
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                alias:
+                  type: string
+                  maxLength: 32
+      responses:
+        '200':
+          description: 更新后的说话人列表
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /speakers/{label}/merge:
+    put:
+      summary: 合并或取消合并说话人
+      parameters:
+        - name: label
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                target:
+                  type: string
+                  description: 目标稳定标签；空串表示取消合并
+      responses:
+        '200':
+          description: 更新后的说话人列表
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /lexicon:
+    get:
+      summary: 读取场景术语表
+      responses:
+        '200':
+          description: 当前术语规则
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lexicon'
+    put:
+      summary: 原子替换场景术语表
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Lexicon'
+      responses:
+        '200':
+          description: 更新后的术语表
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /settings:
+    get:
+      summary: 读取当前设置
+      responses:
+        '200':
+          description: 段落模型、语义修正与 ASR 选择
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Settings'
+    put:
+      summary: 更新设置
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Settings'
+      responses:
+        '200':
+          description: 更新后的设置
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /models:
+    get:
+      summary: 列出当前端点可用模型
+      responses:
+        '200':
+          description: 模型 ID 列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  models:
+                    type: array
+                    items:
+                      type: string
+  /paragraphs:
+    get:
+      summary: 当前预览段落列表
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5000
+            default: 500
+        - name: date
+          in: query
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+      responses:
+        '200':
+          description: 段落元信息列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ParagraphMeta'
+  /paragraphs/split:
+    post:
+      summary: 按主题重新划分最近窗口
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                limit:
+                  type: integer
+                  default: 500
+      responses:
+        '200':
+          description: 重新划分统计
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /paragraphs/correct:
+    post:
+      summary: 手动修正最近窗口内派生段落
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                limit:
+                  type: integer
+                  default: 500
+      responses:
+        '200':
+          description: 修正统计
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /paragraphs/{id}/correct:
+    post:
+      summary: 修正指定段落
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 修正统计
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /paragraphs/{id}/asr:
+    post:
+      summary: 用当前 ASR 重新识别指定段落
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 重识别统计
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /paragraphs/{id}/summarize:
+    post:
+      summary: 生成指定段落独立摘要
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 摘要内容
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /capture:
+    put:
+      summary: 幂等启停麦克风
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                state:
+                  type: string
+                  enum: [RUNNING, STOPPED]
+      responses:
+        '200':
+          description: 当前状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /segments:
+    get:
+      summary: 倒序历史分段
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: before
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: 分段列表与翻页游标
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SegmentView'
+                  nextBefore:
+                    type: string
+  /segments/{id}/audio:
+    get:
+      summary: 读取分段录音
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 音频文件内容
+          content:
+            audio/mp4: {}
+            audio/wav: {}
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /markdown:
+    get:
+      summary: Markdown 合并文稿
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 500
+        - name: date
+          in: query
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+        - name: download
+          in: query
+          schema:
+            type: boolean
+        - name: lang
+          in: query
+          description: 文稿固定文案的语言；原始转写内容不受影响
+          schema:
+            type: string
+            enum: [zh, en]
+            default: zh
+      responses:
+        '200':
+          description: Markdown 文本
+          content:
+            text/markdown: {}
+  /events:
+    get:
+      summary: Server-Sent Events 实时事件流
+      responses:
+        '200':
+          description: SSE 流
+          content:
+            text/event-stream: {}
+components:
+  responses:
+    BadRequest:
+      description: 请求参数无效
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: 请求来源无效
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+    StatusResponse:
+      type: object
+      properties:
+        state:
+          type: string
+          enum: [STOPPED, RUNNING, STOPPING]
+        startedAt:
+          type: string
+          format: date-time
+        segmentCount:
+          type: integer
+        droppedChunks:
+          type: integer
+        lastError:
+          type: string
+        uptimeSeconds:
+          type: integer
+    StatsResponse:
+      type: object
+      properties:
+        audioFiles:
+          type: integer
+        audioBytes:
+          type: integer
+        segments:
+          type: integer
+        transcriptChars:
+          type: integer
+        updatedAt:
+          type: string
+          format: date-time
+    DayStat:
+      type: object
+      properties:
+        date:
+          type: string
+        segments:
+          type: integer
+        chars:
+          type: integer
+        audioFiles:
+          type: integer
+        audioBytes:
+          type: integer
+    DayDeleteResponse:
+      type: object
+      properties:
+        date:
+          type: string
+        segments:
+          type: integer
+        audioFiles:
+          type: integer
+        audioBytes:
+          type: integer
+        trashPath:
+          type: string
+        snapshot:
+          type: string
+        dryRun:
+          type: boolean
+        removedParagraphs:
+          type: integer
+    SpeakerView:
+      type: object
+      properties:
+        label:
+          type: string
+        name:
+          type: string
+        mergedInto:
+          type: string
+        count:
+          type: integer
+        updatedAt:
+          type: string
+          format: date-time
+    Lexicon:
+      type: object
+      properties:
+        version:
+          type: integer
+        rules:
+          type: array
+          items:
+            type: object
+            properties:
+              from:
+                type: string
+              to:
+                type: string
+    Settings:
+      type: object
+      properties:
+        model:
+          type: string
+        correct:
+          type: boolean
+        asr:
+          type: string
+          enum: [local, mimo]
+    ParagraphMeta:
+      type: object
+      properties:
+        id:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+        speaker:
+          type: string
+        segmentCount:
+          type: integer
+        source:
+          type: string
+        title:
+          type: string
+        summary:
+          type: string
+        hasTopic:
+          type: boolean
+    SegmentView:
+      type: object
+      properties:
+        id:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: string
+          format: date-time
+        durationMs:
+          type: integer
+        text:
+          type: string
+        speaker:
+          type: string
+        speakerName:
+          type: string
+        audioPath:
+          type: string

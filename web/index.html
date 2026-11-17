@@ -1,11 +1,12 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>谛听 · 本地语音记录</title>
+  <title data-i18n="page.homeTitle">Diting · Local Speech Archive</title>
   <link rel="stylesheet" href="/app.css">
+  <script src="/i18n.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -15,73 +16,82 @@
         <div class="seal" aria-hidden="true">听</div>
         <div>
           <p class="eyebrow">LOCAL SPEECH ARCHIVE</p>
-          <h1>谛听</h1>
-          <p class="tagline">只留人声，字字有时。</p>
+          <h1 data-i18n="brand.name">Diting</h1>
+          <p class="tagline" data-i18n="tagline.home">Voices only. Every word, timed.</p>
         </div>
       </div>
-      <div class="connection" id="connection" role="status">
-        <span class="connection-dot" aria-hidden="true"></span>
-        <span id="connectionText">正在连接</span>
+      <div class="masthead-actions">
+        <label class="language-control">
+          <span data-i18n="language.label">Language</span>
+          <select data-language-select data-i18n-aria-label="language.label" aria-label="Language">
+            <option value="en">English</option>
+            <option value="zh">中文</option>
+          </select>
+        </label>
+        <div class="connection" id="connection" role="status">
+          <span class="connection-dot" aria-hidden="true"></span>
+          <span id="connectionText" data-i18n="connection.connecting">Connecting</span>
+        </div>
       </div>
     </header>
 
     <main class="console">
-      <aside class="control-column" aria-label="监听控制">
+      <aside class="control-column" data-i18n-aria-label="controls.label" aria-label="Listening controls">
         <section class="listener-panel" aria-labelledby="listenerTitle">
           <div class="on-air">
             <span class="status-dot" id="statusDot" aria-hidden="true"></span>
-            <span id="stateLabel">准备中</span>
+            <span id="stateLabel" data-i18n="state.preparing">Preparing</span>
           </div>
-          <h2 id="listenerTitle">静候人声</h2>
-          <p class="state-hint" id="stateHint">启动后，只有检测到说话时才保存录音。</p>
-          <button class="primary-button" id="toggleButton" type="button" disabled>开始聆听</button>
+          <h2 id="listenerTitle" data-i18n="listener.idleTitle">Waiting for voices</h2>
+          <p class="state-hint" id="stateHint" data-i18n="listener.idleHint">Once started, audio is saved only when speech is detected.</p>
+          <button class="primary-button" id="toggleButton" type="button" data-i18n="action.startListening" disabled>Start listening</button>
           <p class="error-message" id="errorMessage" role="alert" hidden></p>
         </section>
 
         <section class="session-panel" aria-labelledby="sessionTitle">
-          <h2 id="sessionTitle">本次监听</h2>
+          <h2 id="sessionTitle" data-i18n="session.title">This session</h2>
           <dl class="stats">
-            <div><dt>持续</dt><dd id="uptime">00:00:00</dd></div>
-            <div><dt>存入</dt><dd><span id="segmentCount">0</span> 段</dd></div>
-            <div><dt>丢帧</dt><dd><span id="droppedChunks">0</span> 块</dd></div>
+            <div><dt data-i18n="session.duration">Duration</dt><dd id="uptime">00:00:00</dd></div>
+            <div><dt data-i18n="session.segments">Saved</dt><dd><span id="segmentCount">0</span> <span data-i18n="unit.segments">segments</span></dd></div>
+            <div><dt data-i18n="session.dropped">Dropped</dt><dd><span id="droppedChunks">0</span> <span data-i18n="unit.chunks">chunks</span></dd></div>
           </dl>
           <p class="technical-note" id="technicalNote">16 kHz&nbsp;&nbsp;·&nbsp;&nbsp;MONO&nbsp;&nbsp;·&nbsp;&nbsp;ON DEVICE</p>
         </section>
 
         <section class="archive-panel" aria-labelledby="archiveTitle">
-          <h2 id="archiveTitle">全部归档</h2>
+          <h2 id="archiveTitle" data-i18n="archive.title">Full archive</h2>
           <dl class="stats">
-            <div><dt>录音</dt><dd><span id="archiveFiles">—</span> 个</dd></div>
-            <div><dt>占用</dt><dd id="archiveSize">—</dd></div>
-            <div><dt>文字</dt><dd><span id="archiveChars">—</span> 字</dd></div>
+            <div><dt data-i18n="archive.recordings">Recordings</dt><dd><span id="archiveFiles">—</span> <span data-i18n="unit.files">files</span></dd></div>
+            <div><dt data-i18n="archive.usage">Storage</dt><dd id="archiveSize">—</dd></div>
+            <div><dt data-i18n="archive.text">Text</dt><dd><span id="archiveChars">—</span> <span data-i18n="unit.chars">chars</span></dd></div>
           </dl>
         </section>
 
         <section class="calendar-panel" aria-labelledby="calendarTitle">
           <div class="calendar-head">
-            <h2 id="calendarTitle">按天归档</h2>
+            <h2 id="calendarTitle" data-i18n="calendar.title">Daily archive</h2>
             <div class="calendar-nav">
-              <button class="calendar-nav-button" id="calendarPrev" type="button" aria-label="上一个月">‹</button>
+              <button class="calendar-nav-button" id="calendarPrev" type="button" data-i18n-aria-label="calendar.previous" aria-label="Previous month">‹</button>
               <span class="calendar-month" id="calendarMonth" aria-live="polite"></span>
-              <button class="calendar-nav-button" id="calendarNext" type="button" aria-label="下一个月">›</button>
+              <button class="calendar-nav-button" id="calendarNext" type="button" data-i18n-aria-label="calendar.next" aria-label="Next month">›</button>
             </div>
           </div>
           <div class="calendar-grid" id="calendarGrid"></div>
           <div class="calendar-detail" id="calendarDetail" hidden>
             <p class="calendar-detail-date" id="calendarDetailDate"></p>
             <dl class="stats calendar-detail-stats">
-              <div><dt>记录</dt><dd><span id="calendarDetailSegments">0</span> 段</dd></div>
-              <div><dt>文字</dt><dd><span id="calendarDetailChars">0</span> 字</dd></div>
-              <div><dt>录音</dt><dd><span id="calendarDetailFiles">0</span> 个</dd></div>
-              <div><dt>占用</dt><dd id="calendarDetailSize">0 B</dd></div>
+              <div><dt data-i18n="calendar.records">Records</dt><dd><span id="calendarDetailSegments">0</span> <span data-i18n="unit.segments">segments</span></dd></div>
+              <div><dt data-i18n="calendar.text">Text</dt><dd><span id="calendarDetailChars">0</span> <span data-i18n="unit.chars">chars</span></dd></div>
+              <div><dt data-i18n="calendar.recordings">Recordings</dt><dd><span id="calendarDetailFiles">0</span> <span data-i18n="unit.files">files</span></dd></div>
+              <div><dt data-i18n="calendar.usage">Storage</dt><dd id="calendarDetailSize">0 B</dd></div>
             </dl>
-            <button class="danger-button" id="calendarDeleteButton" type="button">移到废纸篓</button>
+            <button class="danger-button" id="calendarDeleteButton" type="button" data-i18n="action.moveTrash">Move to Trash</button>
           </div>
         </section>
 
         <section class="privacy-panel" aria-labelledby="privacyTitle">
-          <h2 id="privacyTitle">声音不出本机</h2>
-          <p id="privacyText">语音识别和音频保存都在本机，不上传音频。议题分析会把转写文本发送到所配置的模型 API（默认小米 MiMo）。</p>
+          <h2 id="privacyTitle" data-i18n="privacy.localTitle">Audio stays on this device</h2>
+          <p id="privacyText" data-i18n="privacy.localText">Speech recognition and audio storage happen locally; audio is never uploaded. Topic analysis sends transcripts to the configured model API (Xiaomi MiMo by default).</p>
         </section>
       </aside>
 
@@ -89,19 +99,19 @@
         <div class="transcript-header">
           <div>
             <p class="eyebrow">LIVE TRANSCRIPT</p>
-            <h2 id="liveTitle">此刻</h2>
+            <h2 id="liveTitle" data-i18n="live.title">Now</h2>
           </div>
           <div class="transcript-actions">
-            <button class="text-button" id="settingsButton" type="button" hidden>模型</button>
-            <button class="text-button" id="lexiconButton" type="button">术语表</button>
-            <a class="text-button" href="/records.html">声音记录</a>
-            <button class="text-button" id="showPreviewButton" type="button" hidden>显示文稿</button>
+            <button class="text-button" id="settingsButton" type="button" data-i18n="action.settings" hidden>Model</button>
+            <button class="text-button" id="lexiconButton" type="button" data-i18n="action.lexicon">Lexicon</button>
+            <a class="text-button" href="/records.html" data-i18n="action.records">Voice records</a>
+            <button class="text-button" id="showPreviewButton" type="button" data-i18n="preview.show" hidden>Show transcript</button>
           </div>
         </div>
 
-        <div class="live-now" aria-label="当前识别文本">
+        <div class="live-now" data-i18n-aria-label="live.label" aria-label="Current recognized text">
           <span class="live-marker" aria-hidden="true">NOW</span>
-          <p id="interimText">正在连接本地服务…</p>
+          <p id="interimText" data-i18n="live.connecting">Connecting to the local service…</p>
           <span class="live-time" id="liveTime"></span>
         </div>
 
@@ -109,19 +119,19 @@
           <div class="preview-header">
             <div>
               <p class="eyebrow">MARKDOWN</p>
-              <h2 id="previewTitle">合并文稿</h2>
+              <h2 id="previewTitle" data-i18n="preview.title">Merged transcript</h2>
             </div>
             <div class="preview-actions">
-              <button class="text-button" id="splitParagraphsButton" type="button" title="使用当前模型按会议议题重新划分最近 500 条记录，原始转写不变" hidden>按主题分段</button>
-              <a class="text-button" id="markdownDownload" href="/api/markdown?download=1" download>下载 .md</a>
-              <button class="icon-button" id="hidePreviewButton" type="button" aria-label="隐藏合并文稿预览" title="隐藏预览">×</button>
+              <button class="text-button" id="splitParagraphsButton" type="button" data-i18n="preview.split" data-i18n-title="preview.splitTitle" title="Use the current model to split the latest 500 records by meeting topic. Original transcripts remain unchanged" hidden>Split by topic</button>
+              <a class="text-button" id="markdownDownload" href="/api/markdown?download=1&lang=en" data-i18n="preview.download" download>Download .md</a>
+              <button class="icon-button" id="hidePreviewButton" type="button" data-i18n-aria-label="preview.hideLabel" data-i18n-title="preview.hide" aria-label="Hide merged transcript preview" title="Hide preview">×</button>
             </div>
           </div>
-          <p class="preview-note" id="previewNote" role="status">最近 500 条 · 模型议题</p>
+          <p class="preview-note" id="previewNote" role="status">Last 500 records · Model topics</p>
           <div class="markdown-scroll" id="markdownScroll">
             <article class="markdown-body" id="markdownPreview"></article>
             <div class="markdown-live" id="markdownLive" hidden>
-              <span class="markdown-live-label">此刻</span>
+              <span class="markdown-live-label" data-i18n="live.title">Now</span>
               <p id="markdownLiveText"></p>
             </div>
           </div>
@@ -131,98 +141,98 @@
       <aside class="topics-panel" aria-labelledby="topicsTitle">
         <div class="topics-header">
           <p class="eyebrow">TOPIC INDEX</p>
-          <h2 id="topicsTitle">主题分类</h2>
-          <p class="topics-note">只收录有讨论价值的会议议题</p>
+          <h2 id="topicsTitle" data-i18n="topics.title">Topic index</h2>
+          <p class="topics-note" data-i18n="topics.note">Only meeting topics worth discussing are included</p>
         </div>
-        <p class="topics-empty" id="topicsEmpty">还没有主题。完成录音后，可使用“按主题分段”生成。</p>
+        <p class="topics-empty" id="topicsEmpty" data-i18n="topics.empty">No topics yet. After recording, use “Split by topic” to generate them.</p>
         <ol class="topic-list" id="topicList"></ol>
       </aside>
     </main>
 
     <footer>
-      <span>流式识别 · Silero VAD · 本地持久化</span>
-      <span>录音与文本保存在运行目录的 data 中</span>
+      <span data-i18n="footer.homeCapabilities">Streaming recognition · Silero VAD · Local persistence</span>
+      <span data-i18n="footer.storage">Audio and text are stored in data under the working directory</span>
     </footer>
   </div>
 
   <dialog class="dialog" id="deleteDialog" aria-labelledby="deleteDialogTitle">
     <form class="dialog-form" id="deleteForm" method="dialog">
-      <h2 id="deleteDialogTitle">移到废纸篓？</h2>
+      <h2 id="deleteDialogTitle" data-i18n="delete.title">Move to Trash?</h2>
       <p id="deleteDialogText"></p>
-      <p class="dialog-hint">当天的转录文字会一并删除，录音目录会移到废纸篓。此操作无法在页面内撤销。</p>
+      <p class="dialog-hint" data-i18n="delete.hint">The day's transcripts will also be deleted, and its audio folder will be moved to Trash. This cannot be undone from this page.</p>
       <p class="dialog-error" id="deleteDialogError" hidden></p>
       <div class="dialog-actions">
-        <button class="text-button" id="deleteCancel" type="button">取消</button>
-        <button class="danger-button" id="deleteConfirm" type="submit">移到废纸篓</button>
+        <button class="text-button" id="deleteCancel" type="button" data-i18n="action.cancel">Cancel</button>
+        <button class="danger-button" id="deleteConfirm" type="submit" data-i18n="action.moveTrash">Move to Trash</button>
       </div>
     </form>
   </dialog>
 
   <dialog class="dialog" id="speakerDialog" aria-labelledby="speakerDialogTitle">
     <form class="dialog-form" id="speakerForm" method="dialog">
-      <h2 id="speakerDialogTitle">标注说话人</h2>
-      <p class="dialog-hint">稳定标签：<span id="speakerDialogLabel"></span></p>
+      <h2 id="speakerDialogTitle" data-i18n="speaker.title">Label speaker</h2>
+      <p class="dialog-hint"><span data-i18n="speaker.stableLabel">Stable label:</span> <span id="speakerDialogLabel"></span></p>
       <label class="field">
-        <span>显示名</span>
-        <input id="speakerAliasInput" type="text" maxlength="32" autocomplete="off" placeholder="例如：章总">
+        <span data-i18n="speaker.aliasLabel">Display name</span>
+        <input id="speakerAliasInput" type="text" maxlength="32" autocomplete="off" data-i18n-placeholder="speaker.aliasPlaceholder" placeholder="e.g. Andy">
       </label>
       <label class="field">
-        <span>合并到</span>
+        <span data-i18n="speaker.mergeLabel">Merge into</span>
         <select id="speakerMergeTarget">
-          <option value="">不合并</option>
+          <option value="" data-i18n="speaker.mergeNone">Do not merge</option>
         </select>
       </label>
-      <p class="dialog-hint" id="speakerMergeHint">将多个声纹标签合并为同一个人，合并后内容会重新分段。留空可取消合并。</p>
-      <p class="dialog-hint">留空显示名可清除人名，恢复显示稳定标签。只影响显示，不改写历史记录。</p>
+      <p class="dialog-hint" id="speakerMergeHint" data-i18n="speaker.mergeHint">Merge multiple voiceprint labels into one person. Content is regrouped after merging. Leave empty to unmerge.</p>
+      <p class="dialog-hint" data-i18n="speaker.aliasHint">Leave the display name empty to restore the stable label. Display only; history is not rewritten.</p>
       <p class="dialog-error" id="speakerDialogError" hidden></p>
       <div class="dialog-actions">
-        <button class="text-button" id="speakerCancel" type="button">取消</button>
-        <button class="primary-button dialog-submit" id="speakerSave" type="submit">保存</button>
+        <button class="text-button" id="speakerCancel" type="button" data-i18n="action.cancel">Cancel</button>
+        <button class="primary-button dialog-submit" id="speakerSave" type="submit" data-i18n="action.save">Save</button>
       </div>
     </form>
   </dialog>
 
   <dialog class="dialog" id="lexiconDialog" aria-labelledby="lexiconDialogTitle">
     <form class="dialog-form" id="lexiconForm" method="dialog">
-      <h2 id="lexiconDialogTitle">术语表</h2>
-      <p class="dialog-hint">每行一条“识别词=正确词”，例如 <code>张总=章总</code>。以 <code>#</code> 开头的行会被忽略。</p>
+      <h2 id="lexiconDialogTitle" data-i18n="lexicon.title">Lexicon</h2>
+      <p class="dialog-hint" data-i18n="lexicon.help">One “recognized=correct” rule per line, e.g. recognized=correct. Lines starting with # are ignored.</p>
       <label class="field">
-        <span>替换规则</span>
-        <textarea id="lexiconInput" rows="10" spellcheck="false" placeholder="张总=章总"></textarea>
+        <span data-i18n="lexicon.rules">Replacement rules</span>
+        <textarea id="lexiconInput" rows="10" spellcheck="false" data-i18n-placeholder="lexicon.placeholder" placeholder="recognized=correct"></textarea>
       </label>
-      <p class="dialog-hint">仅影响之后的新转录；历史记录可用 <code>-retranscribe</code> 重新生成。</p>
+      <p class="dialog-hint" data-i18n="lexicon.history">Only new transcripts are affected. Use -retranscribe to regenerate historical records.</p>
       <p class="dialog-error" id="lexiconError" hidden></p>
       <div class="dialog-actions">
-        <button class="text-button" id="lexiconCancel" type="button">取消</button>
-        <button class="primary-button dialog-submit" id="lexiconSave" type="submit">保存</button>
+        <button class="text-button" id="lexiconCancel" type="button" data-i18n="action.cancel">Cancel</button>
+        <button class="primary-button dialog-submit" id="lexiconSave" type="submit" data-i18n="action.save">Save</button>
       </div>
     </form>
   </dialog>
 
   <dialog class="dialog" id="settingsDialog" aria-labelledby="settingsDialogTitle">
     <form class="dialog-form" id="settingsForm" method="dialog">
-      <h2 id="settingsDialogTitle">模型与识别</h2>
+      <h2 id="settingsDialogTitle" data-i18n="settings.title">Model & recognition</h2>
       <label class="field">
-        <span>语音识别</span>
+        <span data-i18n="settings.asrLabel">Speech recognition</span>
         <select id="settingsASR">
-          <option value="local">本地模型（音频不上传）</option>
+          <option value="local" data-i18n="settings.localOption">Local model (audio not uploaded)</option>
           <option value="mimo">MiMo API · mimo-v2.5-asr</option>
         </select>
       </label>
-      <p class="dialog-hint" id="settingsASRHint">VAD 分段和实时临时文本始终在本地处理；这里选择语句结束后的最终识别方式。</p>
+      <p class="dialog-hint" id="settingsASRHint" data-i18n="settings.asrLocalHint">VAD segmentation and interim text are always processed locally. Choose how final recognition runs after each sentence.</p>
       <label class="field">
-        <span>段落模型</span>
+        <span data-i18n="settings.modelLabel">Paragraph model</span>
         <select id="settingsModel"></select>
       </label>
       <label class="field field-check">
         <input id="settingsCorrect" type="checkbox">
-        <span>启用语义修正</span>
+        <span data-i18n="settings.correctLabel">Enable semantic correction</span>
       </label>
-      <p class="dialog-hint">切换模型或暂停修正只影响之后的新段落，历史记录不变。</p>
+      <p class="dialog-hint" data-i18n="settings.hint">Changing the model or pausing correction only affects new paragraphs. History remains unchanged.</p>
       <p class="dialog-error" id="settingsError" hidden></p>
       <div class="dialog-actions">
-        <button class="text-button" id="settingsCancel" type="button">取消</button>
-        <button class="primary-button dialog-submit" id="settingsSave" type="submit">保存</button>
+        <button class="text-button" id="settingsCancel" type="button" data-i18n="action.cancel">Cancel</button>
+        <button class="primary-button dialog-submit" id="settingsSave" type="submit" data-i18n="action.save">Save</button>
       </div>
     </form>
   </dialog>

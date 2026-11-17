@@ -1,5 +1,8 @@
 "use strict";
 
+const i18n = window.DitingI18n;
+const t = (key, variables) => i18n.t(key, variables);
+
 const elements = {
   console: document.querySelector(".console"),
   connection: document.querySelector("#connection"),
@@ -24,6 +27,7 @@ const elements = {
   previewPanel: document.querySelector("#previewPanel"),
   previewNote: document.querySelector("#previewNote"),
   splitParagraphsButton: document.querySelector("#splitParagraphsButton"),
+  markdownDownload: document.querySelector("#markdownDownload"),
   markdownScroll: document.querySelector("#markdownScroll"),
   markdownPreview: document.querySelector("#markdownPreview"),
   markdownLive: document.querySelector("#markdownLive"),
@@ -77,6 +81,23 @@ const elements = {
   settingsSave: document.querySelector("#settingsSave"),
 };
 
+for (const element of [
+  elements.connectionText,
+  elements.stateLabel,
+  elements.listenerTitle,
+  elements.stateHint,
+  elements.toggleButton,
+  elements.privacyTitle,
+  elements.privacyText,
+  elements.interimText,
+  elements.speakerMergeHint,
+  elements.settingsASRHint,
+  elements.splitParagraphsButton,
+  elements.topicsEmpty,
+]) {
+  element.removeAttribute("data-i18n");
+}
+
 const calendarDays = new Map();
 const speakerViews = new Map();
 let currentStatus = { state: "STOPPED", startedAt: null };
@@ -85,6 +106,9 @@ let eventSource;
 let calendarCursor = startOfMonth(new Date());
 let selectedDay = "";
 let activeSpeakerLabel = "";
+let currentASR = "local";
+let currentParagraphs = [];
+let archiveStats = { audioFiles: 0, audioBytes: 0, transcriptChars: 0 };
 
 const previewStorageKey = "diting.previewVisible";
 const previewLimit = 500;
@@ -118,7 +142,7 @@ async function api(path, options = {}) {
   const response = await fetch(path, options);
   const body = await response.json();
   if (!response.ok) {
-    throw new Error(body.error?.message || "本地服务请求失败");
+    throw new Error(i18n.apiError(body.error));
   }
   return body;
 }
@@ -137,36 +161,37 @@ function formatUptime(startedAt) {
   return `${hours}:${minutes}:${remaining}`;
 }
 
-function updateStatus(status) {
+function updateStatus(status, preserveInterim = false) {
   currentStatus = status;
   const running = status.state === "RUNNING";
   const stopping = status.state === "STOPPING";
   elements.listenerPanel.classList.toggle("is-running", running);
   elements.toggleButton.classList.toggle("is-running", running);
   elements.toggleButton.disabled = stopping || requestPending;
-  elements.toggleButton.textContent = running ? "停止聆听" : stopping ? "正在停止…" : "开始聆听";
-  elements.stateLabel.textContent = running ? "ON AIR" : stopping ? "STOPPING" : "STANDBY";
-  elements.listenerTitle.textContent = running ? "正在聆听" : stopping ? "正在收尾" : "静候人声";
+  elements.toggleButton.textContent = running ? t("action.stopListening") : stopping ? t("action.stopping") : t("action.startListening");
+  elements.stateLabel.textContent = running ? t("state.onAir") : stopping ? t("state.stopping") : t("state.standby");
+  elements.listenerTitle.textContent = running ? t("listener.runningTitle") : stopping ? t("listener.stoppingTitle") : t("listener.idleTitle");
   elements.stateHint.textContent = running
-    ? "保持麦克风开启。检测到说话时会显示文字并保存分段。"
+    ? t("listener.runningHint")
     : stopping
-      ? "正在保存最后一句话，完成后停止麦克风。"
-      : "启动后，只有检测到说话时才保存录音。";
+      ? t("listener.stoppingHint")
+      : t("listener.idleHint");
   elements.segmentCount.textContent = status.segmentCount || 0;
   elements.droppedChunks.textContent = status.droppedChunks || 0;
   if (!running && stopping === false) elements.uptime.textContent = "00:00:00";
   showError(status.lastError || "");
+  if (preserveInterim) return;
   if (!running && !stopping) {
-    elements.interimText.textContent = "麦克风已停止。开始聆听后即可实时转写。";
+    elements.interimText.textContent = t("live.stopped");
     elements.liveTime.textContent = "";
     hideLivePreview();
   } else if (running && !elements.liveTime.textContent) {
-    elements.interimText.textContent = "麦克风已开启，等待人声…";
+    elements.interimText.textContent = t("live.waiting");
   }
 }
 
 function formatTime(value) {
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(i18n.localeTag, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -176,7 +201,7 @@ function formatTime(value) {
   }).format(new Date(value));
 }
 
-const numberFormat = new Intl.NumberFormat("zh-CN");
+let numberFormat = new Intl.NumberFormat(i18n.localeTag);
 
 function formatBytes(bytes) {
   if (!bytes) return "0 B";
@@ -191,6 +216,7 @@ function formatBytes(bytes) {
 }
 
 function updateStats(stats) {
+  archiveStats = stats;
   elements.archiveFiles.textContent = numberFormat.format(stats.audioFiles || 0);
   elements.archiveSize.textContent = formatBytes(stats.audioBytes);
   elements.archiveChars.textContent = numberFormat.format(stats.transcriptChars || 0);
@@ -204,14 +230,29 @@ async function loadStats() {
   }
 }
 
-const monthFormat = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long" });
-const dayFormat = new Intl.DateTimeFormat("zh-CN", {
+let monthFormat = new Intl.DateTimeFormat(i18n.localeTag, { year: "numeric", month: "long" });
+let dayFormat = new Intl.DateTimeFormat(i18n.localeTag, {
   year: "numeric",
   month: "long",
   day: "numeric",
   weekday: "short",
 });
-const weekdays = ["一", "二", "三", "四", "五", "六", "日"];
+
+function updateLocaleFormats() {
+  numberFormat = new Intl.NumberFormat(i18n.localeTag);
+  monthFormat = new Intl.DateTimeFormat(i18n.localeTag, { year: "numeric", month: "long" });
+  dayFormat = new Intl.DateTimeFormat(i18n.localeTag, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  });
+}
+
+function weekdayNames() {
+  const format = new Intl.DateTimeFormat(i18n.localeTag, { weekday: "short" });
+  return Array.from({ length: 7 }, (_, index) => format.format(new Date(2024, 0, 1 + index)));
+}
 
 function startOfMonth(date) {
   return new Date(date.getFullYear(), date.getMonth(), 1);
@@ -268,7 +309,7 @@ function renderCalendar() {
   const today = dateKey(new Date());
 
   const fragment = document.createDocumentFragment();
-  for (const name of weekdays) {
+  for (const name of weekdayNames()) {
     const label = document.createElement("span");
     label.className = "calendar-weekday";
     label.textContent = name;
@@ -289,11 +330,11 @@ function renderCalendar() {
     if (day) {
       cell.classList.add("has-data", `level-${calendarLevel(day.audioBytes, maxBytes)}`);
       const parts = [key];
-      if (day.segments) parts.push(`${numberFormat.format(day.segments)} 段`);
-      if (day.audioFiles) parts.push(`${numberFormat.format(day.audioFiles)} 个录音`);
+      if (day.segments) parts.push(t("calendar.segmentSummary", { count: numberFormat.format(day.segments) }));
+      if (day.audioFiles) parts.push(t("calendar.recordingSummary", { count: numberFormat.format(day.audioFiles) }));
       parts.push(formatBytes(day.audioBytes));
       cell.title = parts.join(" · ");
-      cell.setAttribute("aria-label", parts.join("，"));
+      cell.setAttribute("aria-label", parts.join(", "));
     } else {
       cell.disabled = true;
       cell.classList.add("is-empty");
@@ -321,8 +362,12 @@ function renderDayDetail() {
 function openDeleteDialog() {
   const day = calendarDays.get(selectedDay);
   if (!day) return;
-  const summary = `${day.segments || 0} 条记录、${day.audioFiles || 0} 个录音（${formatBytes(day.audioBytes)}）`;
-  elements.deleteDialogText.textContent = `将删除 ${formatDayLabel(day.date)} 的 ${summary}。`;
+  elements.deleteDialogText.textContent = t("delete.description", {
+    date: formatDayLabel(day.date),
+    segments: numberFormat.format(day.segments || 0),
+    recordings: numberFormat.format(day.audioFiles || 0),
+    size: formatBytes(day.audioBytes),
+  });
   elements.deleteDialogError.hidden = true;
   elements.deleteDialog.showModal();
 }
@@ -358,7 +403,7 @@ async function loadSpeakers() {
 
 function speakerDisplayName(label) {
   const view = speakerViews.get(label);
-  return view ? (view.name || label) : label;
+  return i18n.speakerLabel(view ? (view.name || label) : label);
 }
 
 function isMerged(label) {
@@ -366,12 +411,19 @@ function isMerged(label) {
   return view && !!view.mergedInto;
 }
 
+function updateSpeakerMergeHint() {
+  const mergedInto = speakerViews.get(activeSpeakerLabel)?.mergedInto;
+  elements.speakerMergeHint.textContent = mergedInto
+    ? t("speaker.mergeHintCurrent", { name: speakerDisplayName(mergedInto) })
+    : t("speaker.mergeHint");
+}
+
 function openSpeakerDialog(label) {
   if (!label) return;
   activeSpeakerLabel = label;
   const view = speakerViews.get(label);
   const name = view ? (view.name || label) : label;
-  elements.speakerDialogLabel.textContent = label;
+  elements.speakerDialogLabel.textContent = i18n.speakerLabel(label);
   elements.speakerAliasInput.value = name === label ? "" : name;
   elements.speakerAliasInput.disabled = isMerged(label);
 
@@ -379,23 +431,22 @@ function openSpeakerDialog(label) {
   select.replaceChildren();
   const noneOption = document.createElement("option");
   noneOption.value = "";
-  noneOption.textContent = "不合并";
+  noneOption.textContent = t("speaker.mergeNone");
   select.append(noneOption);
   for (const [otherLabel, otherView] of speakerViews) {
     if (otherLabel === label) continue;
     if (otherView.mergedInto) continue;
     const option = document.createElement("option");
     option.value = otherLabel;
-    const displayName = otherView.name || otherLabel;
-    option.textContent = displayName === otherLabel ? otherLabel : `${displayName}（${otherLabel}）`;
+    const displayName = i18n.speakerLabel(otherView.name || otherLabel);
+    const stableLabel = i18n.speakerLabel(otherLabel);
+    option.textContent = displayName === stableLabel ? stableLabel : `${displayName} (${stableLabel})`;
     select.append(option);
   }
   select.value = view?.mergedInto || "";
   select.disabled = false;
 
-  elements.speakerMergeHint.textContent = view?.mergedInto
-    ? `当前已合并到 ${speakerDisplayName(view.mergedInto)}。选择"不合并"可取消。`
-    : "将多个声纹标签合并为同一个人，合并后内容会重新分段。留空可取消合并。";
+  updateSpeakerMergeHint();
 
   elements.speakerDialogError.hidden = true;
   elements.speakerDialog.showModal();
@@ -463,9 +514,9 @@ function parseLexicon(text) {
     const line = lines[i].trim();
     if (!line || line.startsWith("#")) continue;
     const index = line.indexOf("=");
-    if (index < 0) throw new Error(`第 ${i + 1} 行缺少“=”`);
+    if (index < 0) throw new Error(t("lexicon.missingEquals", { line: i + 1 }));
     const from = line.slice(0, index).trim();
-    if (!from) throw new Error(`第 ${i + 1} 行的识别词为空`);
+    if (!from) throw new Error(t("lexicon.emptySource", { line: i + 1 }));
     rules.push({ from, to: line.slice(index + 1).trim() });
   }
   return rules;
@@ -500,17 +551,16 @@ async function submitLexicon(event) {
 
 function updateASRHint(provider) {
   elements.settingsASRHint.textContent = provider === "mimo"
-    ? "最终 WAV 分段将上传到小米 MiMo；失败时自动使用本地识别。实时临时文本仍只在本地生成。"
-    : "VAD 分段和实时临时文本始终在本地处理；这里选择语句结束后的最终识别方式。";
+    ? t("settings.asrCloudHint")
+    : t("settings.asrLocalHint");
 }
 
 function updateASRPresentation(provider) {
+  currentASR = provider;
   const cloud = provider === "mimo";
   elements.technicalNote.textContent = cloud ? "16 kHz  ·  MONO  ·  MIMO API" : "16 kHz  ·  MONO  ·  ON DEVICE";
-  elements.privacyTitle.textContent = cloud ? "云端最终识别" : "声音不出本机";
-  elements.privacyText.textContent = cloud
-    ? "实时临时文本在本地生成；语句结束后的 WAV 分段会上传到小米 MiMo ASR。议题分析也会发送转写文本。"
-    : "语音识别和音频保存都在本机，不上传音频。议题分析会把转写文本发送到所配置的模型 API（默认小米 MiMo）。";
+  elements.privacyTitle.textContent = cloud ? t("privacy.cloudTitle") : t("privacy.localTitle");
+  elements.privacyText.textContent = cloud ? t("privacy.cloudText") : t("privacy.localText");
   updateASRHint(provider);
 }
 
@@ -540,7 +590,7 @@ function fillModelOptions(models, current) {
   for (const model of source) {
     const option = document.createElement("option");
     option.value = model;
-    option.textContent = model || "（无可用模型）";
+    option.textContent = model || t("settings.noModels");
     if (model === current) option.selected = true;
     elements.settingsModel.append(option);
   }
@@ -556,7 +606,7 @@ async function openSettingsDialog() {
     return;
   }
   if (!settings.available) {
-    showError("段落合并未启用，无法修改模型设置");
+    showError(t("settings.unavailable"));
     return;
   }
   let models = [];
@@ -577,7 +627,7 @@ async function submitSettings(event) {
   event.preventDefault();
   const model = elements.settingsModel.value.trim();
   if (!model) {
-    elements.settingsError.textContent = "请选择一个模型";
+    elements.settingsError.textContent = t("settings.modelRequired");
     elements.settingsError.hidden = false;
     return;
   }
@@ -704,7 +754,12 @@ function renderMarkdown(source) {
 }
 
 function previewQuery() {
-  return selectedDay ? `date=${encodeURIComponent(selectedDay)}` : `limit=${previewLimit}`;
+  const selection = selectedDay ? `date=${encodeURIComponent(selectedDay)}` : `limit=${previewLimit}`;
+  return `${selection}&lang=${i18n.locale}`;
+}
+
+function updateMarkdownDownload() {
+  elements.markdownDownload.href = `/api/markdown?download=1&lang=${i18n.locale}`;
 }
 
 function applyPreviewVisibility(scrollToStart = false) {
@@ -721,12 +776,13 @@ async function loadMarkdown(scrollToStart = false) {
     try {
       const paragraphData = await api(`/api/paragraphs?${query}`);
       if (request !== previewRequest) return false;
-      renderTopics(paragraphData.data || []);
+      currentParagraphs = paragraphData.data || [];
+      renderTopics(currentParagraphs);
       return true;
     } catch (error) {
       if (request !== previewRequest) return false;
       elements.topicsEmpty.hidden = false;
-      elements.topicsEmpty.textContent = `主题加载失败：${error.message}`;
+      elements.topicsEmpty.textContent = t("topics.loadFailed", { message: error.message });
       return false;
     }
   }
@@ -738,10 +794,11 @@ async function loadMarkdown(scrollToStart = false) {
       fetch(`/api/markdown?${query}`),
       api(`/api/paragraphs?${query}`),
     ]);
-    if (!response.ok) throw new Error("生成合并文稿失败");
+    if (!response.ok) throw new Error(t("preview.markdownFailed"));
     const source = await response.text();
     if (request !== previewRequest) return false;
-    renderTopics(paragraphData.data || []);
+    currentParagraphs = paragraphData.data || [];
+    renderTopics(currentParagraphs);
     // renderMarkdown escapes every text fragment before inserting its fixed tags.
     elements.markdownPreview.innerHTML = renderMarkdown(source);
     linkifyPreviewSpeakers();
@@ -765,14 +822,14 @@ async function loadMarkdown(scrollToStart = false) {
     previewLoaded = true;
     if (!correctingPreview && !splittingPreview && !retranscribingPreview && !summarizingPreview) {
       elements.previewNote.textContent = selectedDay
-        ? `${formatDayLabel(selectedDay)} · 当天开始的段落`
-        : `最近 ${previewLimit} 条 · 模型议题`;
+        ? t("preview.date", { date: formatDayLabel(selectedDay) })
+        : t("preview.recent", { limit: previewLimit });
       elements.previewNote.classList.remove("is-error");
     }
     return true;
   } catch (error) {
     if (request !== previewRequest) return false;
-    elements.markdownPreview.textContent = `预览加载失败：${error.message}`;
+    elements.markdownPreview.textContent = t("preview.loadFailed", { message: error.message });
     return false;
   }
 }
@@ -796,7 +853,7 @@ async function jumpToParagraph(id) {
     target = document.getElementById(`paragraph-${id}`);
   }
   if (!target) {
-    elements.previewNote.textContent = "未找到对应段落，请刷新后重试";
+    elements.previewNote.textContent = t("preview.notFound");
     elements.previewNote.classList.add("is-error");
     return;
   }
@@ -819,9 +876,9 @@ function renderTopics(paragraphs) {
     const end = paragraphTime(paragraph.endedAt);
     time.textContent = start === end ? start : `${start}–${end}`;
     const title = document.createElement("h3");
-    title.textContent = paragraph.title || "未命名主题";
+    title.textContent = paragraph.title || t("topics.untitled");
     const summary = document.createElement("p");
-    summary.textContent = paragraph.summary || "暂无简介";
+    summary.textContent = paragraph.summary || t("topics.noSummary");
     const link = document.createElement("a");
     link.className = "topic-link";
     link.href = `#paragraph-${paragraph.id}`;
@@ -832,7 +889,7 @@ function renderTopics(paragraphs) {
   }
   elements.topicList.replaceChildren(fragment);
   elements.topicsEmpty.hidden = topics.length > 0;
-  elements.topicsEmpty.textContent = "还没有主题。完成录音后，可使用“按主题分段”生成。";
+  elements.topicsEmpty.textContent = t("topics.empty");
 }
 
 function addParagraphCorrectionButtons(paragraphs) {
@@ -857,26 +914,26 @@ function addParagraphCorrectionButtons(paragraphs) {
     button.type = "button";
     button.className = "md-correct";
     button.dataset.paragraphId = paragraph.id;
-    button.textContent = "语义修正";
+    button.textContent = t("paragraph.correct");
     button.disabled = correctingPreview || splittingPreview || retranscribingPreview || summarizingPreview;
-    button.title = "只修正这一段，原始转写不变";
-    button.setAttribute("aria-label", `语义修正 ${strong.textContent} 的段落`);
+    button.title = t("paragraph.correctTitle");
+    button.setAttribute("aria-label", t("paragraph.correctLabel", { time: strong.textContent }));
     const asrButton = document.createElement("button");
     asrButton.type = "button";
     asrButton.className = "md-asr";
     asrButton.dataset.paragraphId = paragraph.id;
     asrButton.textContent = "ASR";
     asrButton.disabled = correctingPreview || splittingPreview || retranscribingPreview || summarizingPreview;
-    asrButton.title = "使用当前选择的模型重新识别该段录音，原始逐句转写会更新";
-    asrButton.setAttribute("aria-label", `重新识别 ${strong.textContent} 的段落录音`);
+    asrButton.title = t("paragraph.asrTitle");
+    asrButton.setAttribute("aria-label", t("paragraph.asrLabel", { time: strong.textContent }));
     const summaryButton = document.createElement("button");
     summaryButton.type = "button";
     summaryButton.className = "md-summary";
     summaryButton.dataset.paragraphId = paragraph.id;
-    summaryButton.textContent = "总结";
+    summaryButton.textContent = t("paragraph.summary");
     summaryButton.disabled = correctingPreview || splittingPreview || retranscribingPreview || summarizingPreview;
-    summaryButton.title = "使用当前段落模型总结该段内容，原文不变";
-    summaryButton.setAttribute("aria-label", `总结 ${strong.textContent} 的段落`);
+    summaryButton.title = t("paragraph.summaryTitle");
+    summaryButton.setAttribute("aria-label", t("paragraph.summaryLabel", { time: strong.textContent }));
     item.append(" ", button, " ", asrButton, " ", summaryButton);
   }
 }
@@ -885,11 +942,11 @@ async function splitParagraphs() {
   if (correctingPreview || splittingPreview || retranscribingPreview || summarizingPreview) return;
   splittingPreview = true;
   elements.splitParagraphsButton.disabled = true;
-  elements.splitParagraphsButton.textContent = "分段中…";
+  elements.splitParagraphsButton.textContent = t("paragraph.splitting");
   for (const item of elements.markdownPreview.querySelectorAll(".md-correct, .md-asr, .md-summary")) {
     item.disabled = true;
   }
-  elements.previewNote.textContent = `正在按主题重新划分最近 ${previewLimit} 条记录…`;
+  elements.previewNote.textContent = t("paragraph.splitWorking", { limit: previewLimit });
   elements.previewNote.classList.remove("is-error");
   try {
     const result = await api("/api/paragraphs/split", {
@@ -899,22 +956,22 @@ async function splitParagraphs() {
     });
     const refreshed = await loadMarkdown();
     if (!refreshed) {
-      elements.previewNote.textContent = "分段已保存，但文稿刷新失败，请重试";
+      elements.previewNote.textContent = t("paragraph.splitRefreshFailed");
       elements.previewNote.classList.add("is-error");
     } else if (!result.paragraphs) {
-      elements.previewNote.textContent = "没有可分段的记录";
+      elements.previewNote.textContent = t("paragraph.noRecords");
     } else if (result.fallback) {
-      elements.previewNote.textContent = `已生成 ${result.paragraphs} 段 · ${result.fallback} 组保留整段拼接`;
+      elements.previewNote.textContent = t("paragraph.splitFallback", { count: result.paragraphs, fallback: result.fallback });
     } else {
-      elements.previewNote.textContent = `已按主题划分为 ${result.paragraphs} 段 · 原始转写不变`;
+      elements.previewNote.textContent = t("paragraph.splitDone", { count: result.paragraphs });
     }
   } catch (error) {
-    elements.previewNote.textContent = `自动分段失败：${error.message}`;
+    elements.previewNote.textContent = t("paragraph.splitFailed", { message: error.message });
     elements.previewNote.classList.add("is-error");
   } finally {
     splittingPreview = false;
     elements.splitParagraphsButton.disabled = false;
-    elements.splitParagraphsButton.textContent = "按主题分段";
+    elements.splitParagraphsButton.textContent = t("preview.split");
     for (const item of elements.markdownPreview.querySelectorAll(".md-correct, .md-asr, .md-summary")) {
       item.disabled = false;
     }
@@ -929,22 +986,22 @@ async function correctParagraph(id, button) {
   for (const item of elements.markdownPreview.querySelectorAll(".md-correct, .md-asr, .md-summary")) {
     item.disabled = true;
   }
-  button.textContent = "修正中…";
-  elements.previewNote.textContent = "正在使用当前模型修正所选段落…";
+  button.textContent = t("paragraph.correcting");
+  elements.previewNote.textContent = t("paragraph.correctWorking");
   elements.previewNote.classList.remove("is-error");
   try {
     const result = await api(`/api/paragraphs/${encodeURIComponent(id)}/correct`, { method: "POST" });
     const refreshed = await loadMarkdown();
     if (!refreshed) {
-      elements.previewNote.textContent = "修正已保存，但文稿刷新失败，请重试";
+      elements.previewNote.textContent = t("paragraph.correctRefreshFailed");
       elements.previewNote.classList.add("is-error");
     } else if (!result.changed) {
-      elements.previewNote.textContent = "该段无需调整";
+      elements.previewNote.textContent = t("paragraph.correctUnchanged");
     } else {
-      elements.previewNote.textContent = "该段已修正 · 原始转写不变";
+      elements.previewNote.textContent = t("paragraph.correctDone");
     }
   } catch (error) {
-    elements.previewNote.textContent = `修正失败：${error.message}`;
+    elements.previewNote.textContent = t("paragraph.correctFailed", { message: error.message });
     elements.previewNote.classList.add("is-error");
   } finally {
     correctingPreview = false;
@@ -952,7 +1009,7 @@ async function correctParagraph(id, button) {
     let restored;
     for (const item of elements.markdownPreview.querySelectorAll(".md-correct")) {
       item.disabled = false;
-      item.textContent = "语义修正";
+      item.textContent = t("paragraph.correct");
       if (item.dataset.paragraphId === id) restored = item;
     }
     restored?.focus();
@@ -966,22 +1023,22 @@ async function retranscribeParagraph(id, button) {
   for (const item of elements.markdownPreview.querySelectorAll(".md-correct, .md-asr, .md-summary")) {
     item.disabled = true;
   }
-  button.textContent = "识别中…";
-  elements.previewNote.textContent = "正在使用当前选择的模型重新识别该段录音…";
+  button.textContent = t("paragraph.recognizing");
+  elements.previewNote.textContent = t("paragraph.asrWorking");
   elements.previewNote.classList.remove("is-error");
   try {
     const result = await api(`/api/paragraphs/${encodeURIComponent(id)}/asr`, { method: "POST" });
     const refreshed = await loadMarkdown();
     if (!refreshed) {
-      elements.previewNote.textContent = "重识别已保存，但文稿刷新失败，请重试";
+      elements.previewNote.textContent = t("paragraph.asrRefreshFailed");
       elements.previewNote.classList.add("is-error");
     } else if (!result.changed) {
-      elements.previewNote.textContent = `已重新识别 ${result.segments} 条录音 · 原始文本无变化`;
+      elements.previewNote.textContent = t("paragraph.asrUnchanged", { count: result.segments });
     } else {
-      elements.previewNote.textContent = `已重新识别 ${result.segments} 条录音 · 更新 ${result.changed} 条文本`;
+      elements.previewNote.textContent = t("paragraph.asrDone", { count: result.segments, changed: result.changed });
     }
   } catch (error) {
-    elements.previewNote.textContent = `重识别失败：${error.message}`;
+    elements.previewNote.textContent = t("paragraph.asrFailed", { message: error.message });
     elements.previewNote.classList.add("is-error");
   } finally {
     retranscribingPreview = false;
@@ -1003,20 +1060,20 @@ async function summarizeParagraph(id, button) {
   for (const item of elements.markdownPreview.querySelectorAll(".md-correct, .md-asr, .md-summary")) {
     item.disabled = true;
   }
-  button.textContent = "总结中…";
-  elements.previewNote.textContent = "正在使用当前段落模型生成总结…";
+  button.textContent = t("paragraph.summarizing");
+  elements.previewNote.textContent = t("paragraph.summaryWorking");
   elements.previewNote.classList.remove("is-error");
   try {
     await api(`/api/paragraphs/${encodeURIComponent(id)}/summarize`, { method: "POST" });
     const refreshed = await loadMarkdown();
     if (!refreshed) {
-      elements.previewNote.textContent = "总结已保存，但文稿刷新失败，请重试";
+      elements.previewNote.textContent = t("paragraph.summaryRefreshFailed");
       elements.previewNote.classList.add("is-error");
     } else {
-      elements.previewNote.textContent = "段落总结已生成 · 原始转写不变";
+      elements.previewNote.textContent = t("paragraph.summaryDone");
     }
   } catch (error) {
-    elements.previewNote.textContent = `总结失败：${error.message}`;
+    elements.previewNote.textContent = t("paragraph.summaryFailed", { message: error.message });
     elements.previewNote.classList.add("is-error");
   } finally {
     summarizingPreview = false;
@@ -1024,7 +1081,7 @@ async function summarizeParagraph(id, button) {
     let restored;
     for (const item of elements.markdownPreview.querySelectorAll(".md-correct, .md-asr, .md-summary")) {
       item.disabled = false;
-      if (item.classList.contains("md-summary")) item.textContent = "总结";
+      if (item.classList.contains("md-summary")) item.textContent = t("paragraph.summary");
       if (item.dataset.paragraphId === id && item.classList.contains("md-summary")) restored = item;
     }
     restored?.focus();
@@ -1055,9 +1112,9 @@ function linkifyPreviewSpeakers() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "md-speaker";
-    button.textContent = speakerText;
+    button.textContent = speakerDisplayName(label);
     button.dataset.label = label;
-    button.title = `标注 ${label}`;
+    button.title = t("speaker.annotate", { label: i18n.speakerLabel(label) });
 
     const before = document.createTextNode(parts[0] + " · ");
     const after = document.createTextNode(" · " + parts.slice(2).join(" · "));
@@ -1127,7 +1184,7 @@ function connectEvents() {
   eventSource = new EventSource("/api/events");
   eventSource.onopen = () => {
     elements.connection.classList.add("is-connected");
-    elements.connectionText.textContent = "实时已连接";
+    elements.connectionText.textContent = t("connection.connected");
     loadStatus();
     loadDays();
     loadSpeakers();
@@ -1136,7 +1193,7 @@ function connectEvents() {
   eventSource.onerror = (event) => {
     if (event.data) return;
     elements.connection.classList.remove("is-connected");
-    elements.connectionText.textContent = "连接中断，正在重连";
+    elements.connectionText.textContent = t("connection.reconnecting");
   };
   eventSource.addEventListener("status", (event) => updateStatus(JSON.parse(event.data)));
   eventSource.addEventListener("error", (event) => {
@@ -1144,7 +1201,7 @@ function connectEvents() {
   });
   eventSource.addEventListener("interim", (event) => {
     const interim = JSON.parse(event.data);
-    elements.interimText.textContent = interim.text || "正在完成当前语句…";
+    elements.interimText.textContent = interim.text || t("live.finishing");
     elements.liveTime.textContent = interim.startedAt ? formatTime(interim.startedAt) : "";
     updateLivePreview(interim);
   });
@@ -1156,7 +1213,7 @@ function connectEvents() {
     schedulePreviewRefresh();
   });
   eventSource.addEventListener("segment", () => {
-    elements.interimText.textContent = "当前语句已保存，继续聆听…";
+    elements.interimText.textContent = t("live.saved");
     elements.liveTime.textContent = "";
     hideLivePreview();
     loadStatus();
@@ -1178,6 +1235,34 @@ async function showCalendarSelection() {
     elements.previewPanel.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 }
+
+i18n.subscribe(() => {
+  updateLocaleFormats();
+  updateStatus(currentStatus, currentStatus.state === "RUNNING");
+  updateStats(archiveStats);
+  updateMarkdownDownload();
+  updateASRPresentation(currentASR);
+  renderCalendar();
+  renderDayDetail();
+  renderTopics(currentParagraphs);
+  elements.connectionText.textContent = t(elements.connection.classList.contains("is-connected") ? "connection.connected" : "connection.reconnecting");
+  elements.splitParagraphsButton.textContent = t(splittingPreview ? "paragraph.splitting" : "preview.split");
+  if (elements.settingsDialog.open) updateASRHint(elements.settingsASR.value);
+  if (elements.speakerDialog.open) {
+    elements.speakerDialogLabel.textContent = i18n.speakerLabel(activeSpeakerLabel);
+    updateSpeakerMergeHint();
+    for (const option of elements.speakerMergeTarget.options) {
+      if (!option.value) {
+        option.textContent = t("speaker.mergeNone");
+        continue;
+      }
+      const displayName = speakerDisplayName(option.value);
+      const stableLabel = i18n.speakerLabel(option.value);
+      option.textContent = displayName === stableLabel ? stableLabel : `${displayName} (${stableLabel})`;
+    }
+  }
+  loadMarkdown();
+});
 
 elements.toggleButton.addEventListener("click", toggleCapture);
 elements.calendarPrev.addEventListener("click", () => {
@@ -1259,6 +1344,7 @@ setInterval(() => {
   }
 }, 1000);
 
+updateMarkdownDownload();
 applyPreviewVisibility();
 renderCalendar();
 Promise.all([loadStatus(), loadDays(), loadSpeakers(), loadSettingsButton()]).finally(connectEvents);

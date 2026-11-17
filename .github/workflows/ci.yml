@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Check formatting
+        run: |
+          if [ -n "$(gofmt -l cmd internal tokusage web)" ]; then
+            echo "The following files are not gofmt formatted:"
+            gofmt -l cmd internal tokusage web
+            exit 1
+          fi
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Test web internationalization
+        run: node --test web/i18n_test.js
+
+      - name: Check coverage threshold
+        run: |
+          total=$(go tool cover -func=coverage.out | grep '^total:' | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${total}%"
+          awk -v c="$total" 'BEGIN { if (c < 50) { print "Coverage below 50%"; exit 1 } }'
+
+      - name: Build
+        run: go build -o bin/diting ./cmd/diting
+
+      - name: Validate OpenAPI contract
+        run: |
+          if ! command -v npx &> /dev/null; then
+            echo "npx not found; skipping spectral lint"
+            exit 0
+          fi
+          npx --yes @stoplight/spectral-cli@latest lint api/openapi.yaml --ruleset https://unpkg.com/@stoplight/spectral-rulesets@latest/dist/oas.json || true
+
+  contract-breaking-check:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install oasdiff
+        run: go install github.com/tufin/oasdiff@latest
+
+      - name: Detect breaking changes
+        run: |
+          git show origin/main:api/openapi.yaml > /tmp/openapi-base.yaml 2>/dev/null || touch /tmp/openapi-base.yaml
+          if [ ! -s /tmp/openapi-base.yaml ]; then
+            echo "No baseline OpenAPI contract on main; skipping breaking check"
+            exit 0
+          fi
+          oasdiff breaking /tmp/openapi-base.yaml api/openapi.yaml

@@ -24,7 +24,7 @@ const (
 
 // ErrInvalidGrouping marks a fast, malformed model reply. It must not trigger
 // the unavailability cooldown, which exists for hanging or unreachable servers.
-var ErrInvalidGrouping = errors.New("模型议题划分无效")
+var ErrInvalidGrouping = errors.New("invalid model grouping")
 
 // ErrInvalidCorrection marks a malformed correction reply; like ErrInvalidGrouping
 // it must not trigger the unavailability cooldown.
