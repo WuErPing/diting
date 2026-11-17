@@ -46,7 +46,18 @@ const elements = {
   calendarDetailChars: document.querySelector("#calendarDetailChars"),
   calendarDetailFiles: document.querySelector("#calendarDetailFiles"),
   calendarDetailSize: document.querySelector("#calendarDetailSize"),
+  calendarSummaryButton: document.querySelector("#calendarSummaryButton"),
   calendarDeleteButton: document.querySelector("#calendarDeleteButton"),
+  minutesDialog: document.querySelector("#minutesDialog"),
+  minutesDialogDate: document.querySelector("#minutesDialogDate"),
+  minutesStatus: document.querySelector("#minutesStatus"),
+  minutesError: document.querySelector("#minutesError"),
+  minutesContent: document.querySelector("#minutesContent"),
+  minutesPreview: document.querySelector("#minutesPreview"),
+  minutesSource: document.querySelector("#minutesSource"),
+  minutesDownload: document.querySelector("#minutesDownload"),
+  minutesCloseIcon: document.querySelector("#minutesCloseIcon"),
+  minutesCloseButton: document.querySelector("#minutesCloseButton"),
   deleteDialog: document.querySelector("#deleteDialog"),
   deleteForm: document.querySelector("#deleteForm"),
   deleteDialogText: document.querySelector("#deleteDialogText"),
@@ -62,23 +73,6 @@ const elements = {
   speakerDialogError: document.querySelector("#speakerDialogError"),
   speakerCancel: document.querySelector("#speakerCancel"),
   speakerSave: document.querySelector("#speakerSave"),
-  lexiconButton: document.querySelector("#lexiconButton"),
-  lexiconDialog: document.querySelector("#lexiconDialog"),
-  lexiconForm: document.querySelector("#lexiconForm"),
-  lexiconInput: document.querySelector("#lexiconInput"),
-  lexiconError: document.querySelector("#lexiconError"),
-  lexiconCancel: document.querySelector("#lexiconCancel"),
-  lexiconSave: document.querySelector("#lexiconSave"),
-  settingsButton: document.querySelector("#settingsButton"),
-  settingsDialog: document.querySelector("#settingsDialog"),
-  settingsForm: document.querySelector("#settingsForm"),
-  settingsModel: document.querySelector("#settingsModel"),
-  settingsASR: document.querySelector("#settingsASR"),
-  settingsASRHint: document.querySelector("#settingsASRHint"),
-  settingsCorrect: document.querySelector("#settingsCorrect"),
-  settingsError: document.querySelector("#settingsError"),
-  settingsCancel: document.querySelector("#settingsCancel"),
-  settingsSave: document.querySelector("#settingsSave"),
 };
 
 for (const element of [
@@ -91,9 +85,10 @@ for (const element of [
   elements.privacyText,
   elements.interimText,
   elements.speakerMergeHint,
-  elements.settingsASRHint,
   elements.splitParagraphsButton,
   elements.topicsEmpty,
+  elements.calendarSummaryButton,
+  elements.minutesStatus,
 ]) {
   element.removeAttribute("data-i18n");
 }
@@ -121,6 +116,9 @@ let splittingPreview = false;
 let retranscribingPreview = false;
 let summarizingPreview = false;
 let paragraphCorrectionAvailable = false;
+let summarizingDay = false;
+let activeMinutesDate = "";
+let minutesDownloadURL = "";
 
 function readPreviewPreference() {
   try {
@@ -356,7 +354,10 @@ function renderDayDetail() {
   elements.calendarDetailChars.textContent = numberFormat.format(day.chars || 0);
   elements.calendarDetailFiles.textContent = numberFormat.format(day.audioFiles || 0);
   elements.calendarDetailSize.textContent = formatBytes(day.audioBytes);
-  elements.calendarDeleteButton.disabled = !day.segments && !day.audioFiles;
+  elements.calendarSummaryButton.disabled = summarizingDay || !day.segments || !paragraphCorrectionAvailable;
+  elements.calendarSummaryButton.textContent = t(summarizingDay ? "minutes.generating" : "minutes.generate");
+  elements.calendarSummaryButton.title = paragraphCorrectionAvailable ? "" : t("minutes.unavailable");
+  elements.calendarDeleteButton.disabled = summarizingDay || (!day.segments && !day.audioFiles);
 }
 
 function openDeleteDialog() {
@@ -388,6 +389,50 @@ async function submitDelete(event) {
     elements.deleteDialogError.hidden = false;
   } finally {
     elements.deleteConfirm.disabled = false;
+  }
+}
+
+function updateMinutesDownload(date, markdown) {
+  if (minutesDownloadURL) URL.revokeObjectURL(minutesDownloadURL);
+  minutesDownloadURL = URL.createObjectURL(new Blob([markdown], { type: "text/markdown;charset=utf-8" }));
+  elements.minutesDownload.href = minutesDownloadURL;
+  elements.minutesDownload.download = `diting-${date}-minutes.md`;
+}
+
+async function generateDayMinutes() {
+  const date = selectedDay;
+  if (!date || summarizingDay || !paragraphCorrectionAvailable) return;
+  summarizingDay = true;
+  activeMinutesDate = date;
+  renderDayDetail();
+
+  elements.minutesDialogDate.textContent = formatDayLabel(date);
+  elements.minutesStatus.textContent = t("minutes.working");
+  elements.minutesStatus.hidden = false;
+  elements.minutesError.hidden = true;
+  elements.minutesContent.hidden = true;
+  elements.minutesDownload.hidden = true;
+  elements.minutesPreview.replaceChildren();
+  elements.minutesSource.textContent = "";
+  if (!elements.minutesDialog.open) elements.minutesDialog.showModal();
+  elements.minutesCloseIcon.focus();
+
+  try {
+    const result = await api(`/api/days/${encodeURIComponent(date)}/minutes`, { method: "POST" });
+    elements.minutesPreview.innerHTML = renderMarkdown(result.markdown);
+    elements.minutesSource.textContent = result.markdown;
+    updateMinutesDownload(date, result.markdown);
+    elements.minutesStatus.hidden = true;
+    elements.minutesContent.hidden = false;
+    elements.minutesDownload.hidden = false;
+    elements.minutesDownload.focus();
+  } catch (error) {
+    elements.minutesStatus.hidden = true;
+    elements.minutesError.textContent = t("minutes.failed", { message: error.message });
+    elements.minutesError.hidden = false;
+  } finally {
+    summarizingDay = false;
+    renderDayDetail();
   }
 }
 
@@ -495,73 +540,12 @@ async function submitSpeaker(event) {
   }
 }
 
-async function openLexiconDialog() {
-  elements.lexiconError.hidden = true;
-  try {
-    const { rules } = await api("/api/lexicon");
-    elements.lexiconInput.value = rules.map((rule) => `${rule.from}=${rule.to}`).join("\n");
-    elements.lexiconDialog.showModal();
-    elements.lexiconInput.focus();
-  } catch (error) {
-    showError(error.message);
-  }
-}
-
-function parseLexicon(text) {
-  const rules = [];
-  const lines = text.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i].trim();
-    if (!line || line.startsWith("#")) continue;
-    const index = line.indexOf("=");
-    if (index < 0) throw new Error(t("lexicon.missingEquals", { line: i + 1 }));
-    const from = line.slice(0, index).trim();
-    if (!from) throw new Error(t("lexicon.emptySource", { line: i + 1 }));
-    rules.push({ from, to: line.slice(index + 1).trim() });
-  }
-  return rules;
-}
-
-async function submitLexicon(event) {
-  event.preventDefault();
-  let rules;
-  try {
-    rules = parseLexicon(elements.lexiconInput.value);
-  } catch (error) {
-    elements.lexiconError.textContent = error.message;
-    elements.lexiconError.hidden = false;
-    return;
-  }
-  elements.lexiconSave.disabled = true;
-  try {
-    await api("/api/lexicon", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rules }),
-    });
-    elements.lexiconDialog.close();
-    schedulePreviewRefresh();
-  } catch (error) {
-    elements.lexiconError.textContent = error.message;
-    elements.lexiconError.hidden = false;
-  } finally {
-    elements.lexiconSave.disabled = false;
-  }
-}
-
-function updateASRHint(provider) {
-  elements.settingsASRHint.textContent = provider === "mimo"
-    ? t("settings.asrCloudHint")
-    : t("settings.asrLocalHint");
-}
-
 function updateASRPresentation(provider) {
   currentASR = provider;
   const cloud = provider === "mimo";
   elements.technicalNote.textContent = cloud ? "16 kHz  ·  MONO  ·  MIMO API" : "16 kHz  ·  MONO  ·  ON DEVICE";
   elements.privacyTitle.textContent = cloud ? t("privacy.cloudTitle") : t("privacy.localTitle");
   elements.privacyText.textContent = cloud ? t("privacy.cloudText") : t("privacy.localText");
-  updateASRHint(provider);
 }
 
 async function loadSettingsButton() {
@@ -569,82 +553,15 @@ async function loadSettingsButton() {
   try {
     const settings = await api("/api/settings");
     updateASRPresentation(settings.asr);
-    elements.settingsButton.hidden = !settings.available;
     elements.splitParagraphsButton.hidden = !settings.available;
     paragraphCorrectionAvailable = Boolean(settings.available);
   } catch {
-    elements.settingsButton.hidden = true;
     elements.splitParagraphsButton.hidden = true;
     paragraphCorrectionAvailable = false;
   }
+  renderDayDetail();
   if (previewVisible && previous !== paragraphCorrectionAvailable) {
     await loadMarkdown();
-  }
-}
-
-function fillModelOptions(models, current) {
-  const list = models && models.length ? models.slice() : [];
-  if (current && !list.includes(current)) list.unshift(current);
-  elements.settingsModel.textContent = "";
-  const source = list.length ? list : [current || ""];
-  for (const model of source) {
-    const option = document.createElement("option");
-    option.value = model;
-    option.textContent = model || t("settings.noModels");
-    if (model === current) option.selected = true;
-    elements.settingsModel.append(option);
-  }
-}
-
-async function openSettingsDialog() {
-  elements.settingsError.hidden = true;
-  let settings;
-  try {
-    settings = await api("/api/settings");
-  } catch (error) {
-    showError(error.message);
-    return;
-  }
-  if (!settings.available) {
-    showError(t("settings.unavailable"));
-    return;
-  }
-  let models = [];
-  try {
-    const available = await api("/api/models");
-    models = available.models || [];
-  } catch {
-    // 模型服务可能暂不可用；仍允许保留当前模型并切换修正开关。
-  }
-  fillModelOptions(models, settings.model);
-  elements.settingsASR.value = settings.asr || "local";
-  updateASRPresentation(elements.settingsASR.value);
-  elements.settingsCorrect.checked = Boolean(settings.correct);
-  elements.settingsDialog.showModal();
-}
-
-async function submitSettings(event) {
-  event.preventDefault();
-  const model = elements.settingsModel.value.trim();
-  if (!model) {
-    elements.settingsError.textContent = t("settings.modelRequired");
-    elements.settingsError.hidden = false;
-    return;
-  }
-  elements.settingsSave.disabled = true;
-  try {
-    const settings = await api("/api/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, correct: elements.settingsCorrect.checked, asr: elements.settingsASR.value }),
-    });
-    updateASRPresentation(settings.asr);
-    elements.settingsDialog.close();
-  } catch (error) {
-    elements.settingsError.textContent = error.message;
-    elements.settingsError.hidden = false;
-  } finally {
-    elements.settingsSave.disabled = false;
   }
 }
 
@@ -1245,9 +1162,12 @@ i18n.subscribe(() => {
   renderCalendar();
   renderDayDetail();
   renderTopics(currentParagraphs);
+  if (elements.minutesDialog.open) {
+    elements.minutesDialogDate.textContent = activeMinutesDate ? formatDayLabel(activeMinutesDate) : "";
+    if (summarizingDay) elements.minutesStatus.textContent = t("minutes.working");
+  }
   elements.connectionText.textContent = t(elements.connection.classList.contains("is-connected") ? "connection.connected" : "connection.reconnecting");
   elements.splitParagraphsButton.textContent = t(splittingPreview ? "paragraph.splitting" : "preview.split");
-  if (elements.settingsDialog.open) updateASRHint(elements.settingsASR.value);
   if (elements.speakerDialog.open) {
     elements.speakerDialogLabel.textContent = i18n.speakerLabel(activeSpeakerLabel);
     updateSpeakerMergeHint();
@@ -1288,7 +1208,10 @@ elements.calendarGrid.addEventListener("click", (event) => {
   renderDayDetail();
   showCalendarSelection();
 });
+elements.calendarSummaryButton.addEventListener("click", generateDayMinutes);
 elements.calendarDeleteButton.addEventListener("click", openDeleteDialog);
+elements.minutesCloseIcon.addEventListener("click", () => elements.minutesDialog.close());
+elements.minutesCloseButton.addEventListener("click", () => elements.minutesDialog.close());
 elements.deleteCancel.addEventListener("click", () => elements.deleteDialog.close());
 elements.deleteForm.addEventListener("submit", submitDelete);
 elements.speakerCancel.addEventListener("click", () => elements.speakerDialog.close());
@@ -1318,14 +1241,7 @@ elements.topicList.addEventListener("click", (event) => {
   event.preventDefault();
   jumpToParagraph(link.dataset.paragraphId);
 });
-elements.lexiconButton.addEventListener("click", openLexiconDialog);
-elements.lexiconCancel.addEventListener("click", () => elements.lexiconDialog.close());
-elements.lexiconForm.addEventListener("submit", submitLexicon);
-elements.settingsButton.addEventListener("click", openSettingsDialog);
 elements.splitParagraphsButton.addEventListener("click", splitParagraphs);
-elements.settingsCancel.addEventListener("click", () => elements.settingsDialog.close());
-elements.settingsForm.addEventListener("submit", submitSettings);
-elements.settingsASR.addEventListener("change", () => updateASRHint(elements.settingsASR.value));
 elements.hidePreviewButton.addEventListener("click", () => {
   previewVisible = false;
   savePreviewPreference(false);

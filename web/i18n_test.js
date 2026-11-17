@@ -59,12 +59,59 @@ test("stable speaker labels are localized without changing their identity", () =
   assert.equal(i18n.speakerLabel("说话人12"), "说话人12");
 });
 
+test("daily meeting minutes have localized actions and errors", () => {
+  const i18n = createI18n({ storage: null, languages: ["en-US"] });
+  assert.equal(i18n.t("minutes.generate"), "Generate meeting minutes");
+  assert.equal(i18n.t("minutes.generating"), "Generating meeting minutes…");
+  assert.equal(i18n.t("minutes.download"), "Download Markdown");
+  assert.equal(i18n.apiError({ code: "DAY_NOT_FOUND" }), "No transcripts are available for this day");
+  i18n.setLocale("zh");
+  assert.equal(i18n.t("minutes.generate"), "生成会议纪要");
+  assert.equal(i18n.apiError({ code: "DAY_SUMMARY_FAILED" }), "会议纪要生成失败，请检查模型设置和网络");
+});
+
+test("unified configuration page has localized content and save feedback", () => {
+  const i18n = createI18n({ storage: null, languages: ["en-US"] });
+  assert.equal(i18n.t("action.config"), "Configuration");
+  assert.equal(i18n.t("settings.pageTitle"), "Configuration");
+  assert.equal(i18n.t("settings.saved"), "Model and recognition settings saved");
+  assert.equal(i18n.t("lexicon.saved"), "Lexicon saved");
+  i18n.setLocale("zh");
+  assert.equal(i18n.t("action.config"), "配置");
+  assert.equal(i18n.t("settings.saved"), "模型与识别设置已保存");
+});
+
+test("record deletion explains its effect on the merged transcript", () => {
+  const i18n = createI18n({ storage: null, languages: ["en-US"] });
+  assert.equal(i18n.t("records.delete"), "Delete");
+  assert.match(i18n.t("records.deleteHint"), /merged transcript/);
+  assert.equal(i18n.apiError({ code: "SEGMENT_DELETE_FAILED" }), "Failed to delete the record");
+  i18n.setLocale("zh");
+  assert.equal(i18n.t("records.delete"), "删除");
+  assert.match(i18n.t("records.deleteHint"), /合并文稿/);
+});
+
+test("batch record selection and deletion are localized", () => {
+  const i18n = createI18n({ storage: null, languages: ["en-US"] });
+  assert.equal(i18n.t("records.selectAll"), "Select all");
+  assert.equal(i18n.t("records.selectedCount", { count: 3 }), "3 selected");
+  assert.equal(i18n.t("records.deleteSelected"), "Delete selected");
+  assert.equal(i18n.t("records.deleteSelectedTitle", { count: 3 }), "Delete 3 records?");
+  assert.equal(i18n.t("records.deleteSelectedDescription", { count: 3 }), "The 3 selected records will be deleted.");
+  assert.equal(i18n.t("records.selectLabel", { time: "11/06 14:00:00" }), "Select record from 11/06 14:00:00");
+  i18n.setLocale("zh");
+  assert.equal(i18n.t("records.selectAll"), "全选");
+  assert.equal(i18n.t("records.selectedCount", { count: 3 }), "已选 3 条");
+  assert.equal(i18n.t("records.deleteSelected"), "删除所选");
+  assert.equal(i18n.t("records.deleteSelectedTitle", { count: 3 }), "删除这 3 条记录？");
+});
+
 test("both locales define exactly the same translation keys", () => {
   assert.deepEqual(Object.keys(messages.zh).sort(), Object.keys(messages.en).sort());
 });
 
 test("every static and dynamic translation reference is defined", () => {
-  const files = ["index.html", "records.html", "app.js", "records.js"];
+  const files = ["index.html", "records.html", "settings.html", "app.js", "records.js", "settings.js"];
   const references = new Set();
   for (const file of files) {
     const source = fs.readFileSync(path.join(__dirname, file), "utf8");

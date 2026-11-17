@@ -190,6 +190,13 @@ func (s *Settings) SummarizeParagraph(ctx context.Context, id string) (SummaryRe
 	return s.worker.SummarizeParagraph(ctx, id)
 }
 
+func (s *Settings) SummarizeDay(ctx context.Context, date string) (DayMinutesResult, error) {
+	if s.worker == nil {
+		return DayMinutesResult{Date: date}, ErrDaySummaryUnavailable
+	}
+	return s.worker.SummarizeDay(ctx, date)
+}
+
 func (s *Settings) SplitRecent(ctx context.Context, limit int) (RebuildStats, error) {
 	if s.worker == nil {
 		return RebuildStats{}, ErrSplitUnavailable

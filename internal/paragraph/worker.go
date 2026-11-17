@@ -194,8 +194,8 @@ func (w *Worker) Notify(segment store.Segment) {
 }
 
 // Reload discards queued work and rebuilds the worker state from the current
-// transcript store. It is used after a day is deleted so stale paragraphs and
-// in-memory runs cannot be written back.
+// transcript store. It is used after archive records are deleted so stale
+// paragraphs and in-memory runs cannot be written back.
 func (w *Worker) Reload() {
 	select {
 	case w.reload <- struct{}{}:

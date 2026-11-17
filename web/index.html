@@ -21,6 +21,7 @@
         </div>
       </div>
       <div class="masthead-actions">
+        <a class="text-button masthead-config" href="/settings.html" data-i18n="action.config">Configuration</a>
         <label class="language-control">
           <span data-i18n="language.label">Language</span>
           <select data-language-select data-i18n-aria-label="language.label" aria-label="Language">
@@ -85,6 +86,7 @@
               <div><dt data-i18n="calendar.recordings">Recordings</dt><dd><span id="calendarDetailFiles">0</span> <span data-i18n="unit.files">files</span></dd></div>
               <div><dt data-i18n="calendar.usage">Storage</dt><dd id="calendarDetailSize">0 B</dd></div>
             </dl>
+            <button class="primary-button" id="calendarSummaryButton" type="button" data-i18n="minutes.generate">Generate meeting minutes</button>
             <button class="danger-button" id="calendarDeleteButton" type="button" data-i18n="action.moveTrash">Move to Trash</button>
           </div>
         </section>
@@ -102,8 +104,6 @@
             <h2 id="liveTitle" data-i18n="live.title">Now</h2>
           </div>
           <div class="transcript-actions">
-            <button class="text-button" id="settingsButton" type="button" data-i18n="action.settings" hidden>Model</button>
-            <button class="text-button" id="lexiconButton" type="button" data-i18n="action.lexicon">Lexicon</button>
             <a class="text-button" href="/records.html" data-i18n="action.records">Voice records</a>
             <button class="text-button" id="showPreviewButton" type="button" data-i18n="preview.show" hidden>Show transcript</button>
           </div>
@@ -155,6 +155,31 @@
     </footer>
   </div>
 
+  <dialog class="dialog minutes-dialog" id="minutesDialog" aria-labelledby="minutesDialogTitle">
+    <div class="dialog-form minutes-dialog-form">
+      <div class="minutes-dialog-header">
+        <div>
+          <h2 id="minutesDialogTitle" data-i18n="minutes.title">Daily meeting minutes</h2>
+          <p class="dialog-hint" id="minutesDialogDate"></p>
+        </div>
+        <button class="icon-button" id="minutesCloseIcon" type="button" data-i18n-aria-label="minutes.close" aria-label="Close">×</button>
+      </div>
+      <p class="preview-note" id="minutesStatus" role="status"></p>
+      <p class="dialog-error" id="minutesError" role="alert" hidden></p>
+      <div class="minutes-dialog-body" id="minutesContent" hidden>
+        <article class="markdown-body" id="minutesPreview"></article>
+        <details class="minutes-source">
+          <summary data-i18n="minutes.source">Markdown source</summary>
+          <pre id="minutesSource"></pre>
+        </details>
+      </div>
+      <div class="dialog-actions">
+        <button class="text-button" id="minutesCloseButton" type="button" data-i18n="minutes.close">Close</button>
+        <a class="text-button" id="minutesDownload" data-i18n="minutes.download" download hidden>Download Markdown</a>
+      </div>
+    </div>
+  </dialog>
+
   <dialog class="dialog" id="deleteDialog" aria-labelledby="deleteDialogTitle">
     <form class="dialog-form" id="deleteForm" method="dialog">
       <h2 id="deleteDialogTitle" data-i18n="delete.title">Move to Trash?</h2>
@@ -192,49 +217,5 @@
     </form>
   </dialog>
 
-  <dialog class="dialog" id="lexiconDialog" aria-labelledby="lexiconDialogTitle">
-    <form class="dialog-form" id="lexiconForm" method="dialog">
-      <h2 id="lexiconDialogTitle" data-i18n="lexicon.title">Lexicon</h2>
-      <p class="dialog-hint" data-i18n="lexicon.help">One “recognized=correct” rule per line, e.g. recognized=correct. Lines starting with # are ignored.</p>
-      <label class="field">
-        <span data-i18n="lexicon.rules">Replacement rules</span>
-        <textarea id="lexiconInput" rows="10" spellcheck="false" data-i18n-placeholder="lexicon.placeholder" placeholder="recognized=correct"></textarea>
-      </label>
-      <p class="dialog-hint" data-i18n="lexicon.history">Only new transcripts are affected. Use -retranscribe to regenerate historical records.</p>
-      <p class="dialog-error" id="lexiconError" hidden></p>
-      <div class="dialog-actions">
-        <button class="text-button" id="lexiconCancel" type="button" data-i18n="action.cancel">Cancel</button>
-        <button class="primary-button dialog-submit" id="lexiconSave" type="submit" data-i18n="action.save">Save</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog class="dialog" id="settingsDialog" aria-labelledby="settingsDialogTitle">
-    <form class="dialog-form" id="settingsForm" method="dialog">
-      <h2 id="settingsDialogTitle" data-i18n="settings.title">Model & recognition</h2>
-      <label class="field">
-        <span data-i18n="settings.asrLabel">Speech recognition</span>
-        <select id="settingsASR">
-          <option value="local" data-i18n="settings.localOption">Local model (audio not uploaded)</option>
-          <option value="mimo">MiMo API · mimo-v2.5-asr</option>
-        </select>
-      </label>
-      <p class="dialog-hint" id="settingsASRHint" data-i18n="settings.asrLocalHint">VAD segmentation and interim text are always processed locally. Choose how final recognition runs after each sentence.</p>
-      <label class="field">
-        <span data-i18n="settings.modelLabel">Paragraph model</span>
-        <select id="settingsModel"></select>
-      </label>
-      <label class="field field-check">
-        <input id="settingsCorrect" type="checkbox">
-        <span data-i18n="settings.correctLabel">Enable semantic correction</span>
-      </label>
-      <p class="dialog-hint" data-i18n="settings.hint">Changing the model or pausing correction only affects new paragraphs. History remains unchanged.</p>
-      <p class="dialog-error" id="settingsError" hidden></p>
-      <div class="dialog-actions">
-        <button class="text-button" id="settingsCancel" type="button" data-i18n="action.cancel">Cancel</button>
-        <button class="primary-button dialog-submit" id="settingsSave" type="submit" data-i18n="action.save">Save</button>
-      </div>
-    </form>
-  </dialog>
 </body>
 </html>

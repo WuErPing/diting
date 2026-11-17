@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title data-i18n="page.settingsTitle">Configuration · Diting</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/i18n.js" defer></script>
+  <script src="/settings.js" defer></script>
+</head>
+<body>
+  <div class="app-shell settings-shell">
+    <header class="masthead">
+      <div class="identity">
+        <div class="seal" aria-hidden="true">听</div>
+        <div>
+          <p class="eyebrow">LOCAL SPEECH ARCHIVE</p>
+          <h1 data-i18n="brand.name">Diting</h1>
+          <p class="tagline" data-i18n="tagline.home">Voices only. Every word, timed.</p>
+        </div>
+      </div>
+      <div class="masthead-actions">
+        <label class="language-control">
+          <span data-i18n="language.label">Language</span>
+          <select data-language-select data-i18n-aria-label="language.label" aria-label="Language">
+            <option value="en">English</option>
+            <option value="zh">中文</option>
+          </select>
+        </label>
+      </div>
+    </header>
+
+    <main class="records-main settings-main" aria-labelledby="settingsPageTitle">
+      <div class="records-header">
+        <div>
+          <p class="eyebrow">LOCAL CONSOLE</p>
+          <h2 id="settingsPageTitle" data-i18n="settings.pageTitle">Configuration</h2>
+          <p class="records-intro" data-i18n="settings.intro">Manage speech recognition, paragraph models, and replacement rules.</p>
+        </div>
+        <div class="records-actions">
+          <a class="text-button" href="/" data-i18n="records.back">Back home</a>
+        </div>
+      </div>
+
+      <div class="settings-grid">
+        <form class="settings-card" id="settingsForm" aria-busy="true">
+          <h2 data-i18n="settings.title">Model &amp; recognition</h2>
+          <fieldset class="settings-fields" id="settingsFields" disabled>
+            <label class="field">
+              <span data-i18n="settings.asrLabel">Speech recognition</span>
+              <select id="settingsASR">
+                <option value="local" data-i18n="settings.localOption">Local model (audio not uploaded)</option>
+                <option value="mimo">MiMo API · mimo-v2.5-asr</option>
+              </select>
+            </label>
+            <p class="dialog-hint" id="settingsASRHint" data-i18n="settings.asrLocalHint">VAD segmentation and interim text are always processed locally. Choose how final recognition runs after each sentence.</p>
+            <label class="field">
+              <span data-i18n="settings.modelLabel">Paragraph model</span>
+              <select id="settingsModel"></select>
+            </label>
+            <label class="field field-check">
+              <input id="settingsCorrect" type="checkbox">
+              <span data-i18n="settings.correctLabel">Enable semantic correction</span>
+            </label>
+            <p class="dialog-hint" data-i18n="settings.hint">Changing the model or pausing correction only affects new paragraphs. History remains unchanged.</p>
+            <p class="dialog-error" id="settingsError" role="alert" hidden></p>
+            <p class="settings-success" id="settingsSaved" role="status" data-i18n="settings.saved" hidden>Model and recognition settings saved</p>
+            <div class="dialog-actions">
+              <button class="primary-button dialog-submit" id="settingsSave" type="submit" data-i18n="action.save">Save</button>
+            </div>
+          </fieldset>
+        </form>
+
+        <form class="settings-card" id="lexiconForm" aria-busy="true">
+          <h2 data-i18n="lexicon.title">Lexicon</h2>
+          <fieldset class="settings-fields" id="lexiconFields" disabled>
+            <p class="dialog-hint" data-i18n="lexicon.help">One “recognized=correct” rule per line, e.g. recognized=correct. Lines starting with # are ignored.</p>
+            <label class="field">
+              <span data-i18n="lexicon.rules">Replacement rules</span>
+              <textarea id="lexiconInput" rows="12" spellcheck="false" data-i18n-placeholder="lexicon.placeholder" placeholder="recognized=correct"></textarea>
+            </label>
+            <p class="dialog-hint" data-i18n="lexicon.history">Only new transcripts are affected. Use -retranscribe to regenerate historical records.</p>
+            <p class="dialog-error" id="lexiconError" role="alert" hidden></p>
+            <p class="settings-success" id="lexiconSaved" role="status" data-i18n="lexicon.saved" hidden>Lexicon saved</p>
+            <div class="dialog-actions">
+              <button class="primary-button dialog-submit" id="lexiconSave" type="submit" data-i18n="action.save">Save</button>
+            </div>
+          </fieldset>
+        </form>
+      </div>
+    </main>
+
+    <footer>
+      <span data-i18n="settings.pageTitle">Configuration</span>
+      <span data-i18n="footer.storage">Audio and text are stored in data under the working directory</span>
+    </footer>
+  </div>
+</body>
+</html>

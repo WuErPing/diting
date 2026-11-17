@@ -92,6 +92,7 @@ func New(ctx context.Context, recognizer *engine.Engine, segmentStore *store.Sto
 		"GET /api/stats":                      s.handleStats,
 		"GET /api/days":                       s.handleDays,
 		"DELETE /api/days/{date}":             s.handleDeleteDay,
+		"POST /api/days/{date}/minutes":       s.handleSummarizeDay,
 		"GET /api/speakers":                   s.handleSpeakers,
 		"PATCH /api/speakers/{label}":         s.handleSpeakerAlias,
 		"PUT /api/speakers/{label}/merge":     s.handleSpeakerMerge,
@@ -109,6 +110,8 @@ func New(ctx context.Context, recognizer *engine.Engine, segmentStore *store.Sto
 		"PUT /api/capture":                    s.handleCapture,
 		"GET /api/segments":                   s.handleSegments,
 		"GET /api/segments/{id}/audio":        s.handleAudio,
+		"DELETE /api/segments/{id}":           s.handleDeleteSegment,
+		"POST /api/segments/delete":           s.handleDeleteSegments,
 		"GET /api/markdown":                   s.handleMarkdown,
 		"GET /api/events":                     s.handleEvents,
 	}

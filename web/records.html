@@ -48,6 +48,14 @@
         </div>
       </div>
       <p class="error-message" id="errorMessage" role="alert" hidden></p>
+      <div class="selection-bar" id="selectionBar" hidden>
+        <label class="select-all">
+          <input type="checkbox" id="selectAllCheckbox">
+          <span data-i18n="records.selectAll">Select all</span>
+        </label>
+        <span class="selection-count" id="selectionCount" role="status"></span>
+        <button class="danger-button" id="deleteSelectedButton" type="button" data-i18n="records.deleteSelected" disabled>Delete selected</button>
+      </div>
       <div class="empty-state" id="emptyState">
         <p data-i18n="records.emptyTitle">No voice records yet</p>
         <span data-i18n="records.emptyHint">Start listening on the home page. Completed sentences will appear here.</span>
@@ -66,6 +74,7 @@
     <li class="segment-item">
       <div class="timeline-node" aria-hidden="true"></div>
       <div class="segment-meta">
+        <input class="segment-select" type="checkbox">
         <button class="segment-speaker" type="button" hidden></button>
         <time class="segment-time"></time>
         <span class="segment-duration"></span>
@@ -74,9 +83,23 @@
       <div class="segment-actions">
         <audio controls preload="none"></audio>
         <a class="download-link" data-i18n="records.download" download>Download audio</a>
+        <button class="segment-delete" type="button" data-i18n="records.delete">Delete</button>
       </div>
     </li>
   </template>
+
+  <dialog class="dialog" id="deleteRecordDialog" aria-labelledby="deleteRecordTitle">
+    <form class="dialog-form" id="deleteRecordForm" method="dialog">
+      <h2 id="deleteRecordTitle" data-i18n="records.deleteTitle">Delete this record?</h2>
+      <p id="deleteRecordDescription"></p>
+      <p class="dialog-hint" id="deleteRecordHint" data-i18n="records.deleteHint">The transcript and audio will be removed, and the merged transcript will be rebuilt without this record. Audio is moved to Trash.</p>
+      <p class="dialog-error" id="deleteRecordError" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="text-button" id="deleteRecordCancel" type="button" data-i18n="action.cancel">Cancel</button>
+        <button class="danger-button" id="deleteRecordConfirm" type="submit" data-i18n="records.delete">Delete</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog class="dialog" id="speakerDialog" aria-labelledby="speakerDialogTitle">
     <form class="dialog-form" id="speakerForm" method="dialog">

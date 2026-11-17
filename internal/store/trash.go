@@ -12,13 +12,9 @@ import (
 // returns the destination. Rename is tried first; cross-device moves fall back
 // to a copy followed by removing the source.
 func moveDirToTrash(dir, label string) (string, error) {
-	root := os.Getenv("DITING_TRASH_DIR")
-	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("locate home directory: %w", err)
-		}
-		root = filepath.Join(home, ".Trash")
+	root, err := trashRoot()
+	if err != nil {
+		return "", err
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return "", fmt.Errorf("create trash directory: %w", err)
@@ -33,6 +29,39 @@ func moveDirToTrash(dir, label string) (string, error) {
 	}
 	if err := os.RemoveAll(dir); err != nil {
 		return destination, fmt.Errorf("remove original audio directory: %w", err)
+	}
+	return destination, nil
+}
+
+func trashRoot() (string, error) {
+	if root := os.Getenv("DITING_TRASH_DIR"); root != "" {
+		return root, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("locate home directory: %w", err)
+	}
+	return filepath.Join(home, ".Trash"), nil
+}
+
+func moveFileToTrash(source, label string) (string, error) {
+	root, err := trashRoot()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", fmt.Errorf("create trash directory: %w", err)
+	}
+	destination := uniqueTrashPath(root, label)
+	if err := os.Rename(source, destination); err == nil {
+		return destination, nil
+	}
+	if err := copyFile(source, destination); err != nil {
+		_ = os.Remove(destination)
+		return "", err
+	}
+	if err := os.Remove(source); err != nil {
+		return destination, fmt.Errorf("remove original audio: %w", err)
 	}
 	return destination, nil
 }

@@ -70,6 +70,7 @@ func (e *Engine) Start(ctx context.Context) error {
 - `GET /api/stats`：返回全量归档统计（音频文件数、总字节数、转写记录数和字符数），覆盖完整历史并短暂缓存。
 - `GET /api/days`：按本地日期返回段数、字数、音频文件数和字节数；包含没有转写记录的孤儿音频。
 - `DELETE /api/days/{date}?dryRun=1`：校验 `YYYY-MM-DD` 与同源请求；`dryRun` 时只返回影响面预览。真实删除前把当天转写快照写入 `data/backups/`，随后删除当天转写及相交段落，把 `audio/YYYYMMDD` 移到废纸篓；返回删除计数、废纸篓路径、快照路径，并广播 SSE `archive`。
+- `POST /api/days/{date}/minutes`：读取本地日期属于当天的全部非空转写，附带时间和说话人显示名，用当前段落模型生成 Markdown 会议纪要；返回日期、转写段数和 Markdown 正文，不改写原始转写或派生段落。日历选择日期后可生成、预览并下载 `.md` 文件。
 - `GET /api/settings`：返回当前段落模型、语义修正开关与 ASR 选择；`PUT /api/settings` 接收 `{"model":"mimo-v2.6-flash","correct":false,"asr":"local|mimo"}` 并原子持久化，实时应用后续识别与段落处理。
 - `GET /api/models`：返回当前 OpenAI 兼容端点的模型 ID 列表。
 - `GET /api/speakers`：返回说话人稳定标签、显示名、计数与更新时间。
@@ -78,6 +79,7 @@ func (e *Engine) Start(ctx context.Context) error {
 - `PUT /api/capture`，`{"state":"RUNNING"}` 或 `{"state":"STOPPED"}`：幂等启停。
 - `GET /api/segments?limit=50&before=<RFC3339>`：倒序历史，限制 `limit` 为 1–100；每条附带 `speakerName` 显示名，`speaker` 仍为稳定标签。
 - `GET /api/segments/{id}/audio`：只按已保存 ID 读取音频，不接受文件路径；按 `.m4a`/`.wav` 返回对应 MIME 与实际文件名。
+- `DELETE /api/segments/{id}`：校验录音 ID 与同源请求，删除指定转写并把对应录音移到废纸篓；移除与该分段相交的派生段落，触发历史重建、统计失效和 SSE `archive`，使合并文稿不再包含该记录。声音记录页逐条提供带确认的删除按钮。
 - `GET /api/markdown?limit=500&date=YYYY-MM-DD&download=1`：把转写合并为 Markdown；说话人输出显示名；启用段落合并时按段落输出起止时间，窗口边界内的段落整段保留，未覆盖分段沿用逐条格式；`limit` 截取最近 N 条用于预览，`date` 改为仅显示本地开始时间属于当天的完整段落且不受 `limit` 截断，`download=1` 返回完整文件。
 - `GET /api/paragraphs?limit=500&date=YYYY-MM-DD`：返回与最近 N 条转写相交的段落 ID、起止时间、议题名称、简明介绍和 `hasTopic`，供主题索引与逐段操作使用；`date` 改为返回本地开始时间属于当天的全部段落且不受 `limit` 截断；模型判定为低信息内容的 `topicExcluded` 段落及空白、纯标点、纯语气词和笑声标记为无主题，旧段落缺少议题字段时按原文回退生成。
 - `POST /api/paragraphs/split`，`{"limit":500}`：用当前模型按会议议题重新划分与最近 N 条转写相交的完整 run；跨说话人判断问答、讨论、决策和行动项，只更新派生段落，不改写原始转写，返回 run、模型切分、单句、降级和段落计数。
@@ -104,7 +106,7 @@ func (e *Engine) Start(ctx context.Context) error {
 ## Success Criteria
 
 - VAD 静音时不产生录音；静音约 1 秒后才结束当前分段，人声结束后生成 16kHz 单声道音频（默认 M4A，失败回退 WAV）和 JSONL 最终记录。
-- 说话过程中 Web 控制台收到本地 interim，结束后收到 final，无需刷新；设置中可在本地 SenseVoice 与 MiMo ASR 间切换最终识别，选择持久化且云端失败回退本地。
+- 说话过程中 Web 控制台收到本地 interim，结束后收到 final，无需刷新；首页通过“配置”按钮进入独立配置页，统一配置模型与识别、语义修正和术语表；可在本地 SenseVoice 与 MiMo ASR 间切换最终识别，选择持久化且云端失败回退本地。
 - 启停操作幂等，重复启动不会打开多个麦克风设备。
 - 重启服务后历史最终记录仍可查看，录音可回放和下载；历史 WAV 与新旧 M4A 均可播放和重转写。
 - 首页中间 Markdown 合并文稿可显示/隐藏并记住选择；临时识别文本实时跟随，分段写入后替换为最终文本，可下载完整 `.md`。最右侧主题分类同步列出主题名称与简明介绍；声音记录通过链接进入独立页面。
