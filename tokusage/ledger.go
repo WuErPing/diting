@@ -44,7 +44,7 @@ func openLedger(path string, logf func(string, ...any), add func(Entry)) (*ledge
 			lineNo++
 			var rec ledgerRecord
 			if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil || rec.V != 1 {
-				logf("tokusage: 跳过账本 %s 第 %d 行（损坏或版本不符）", path, lineNo)
+				logf("tokusage: skipping ledger %s line %d (corrupt or unsupported version)", path, lineNo)
 				continue
 			}
 			add(Entry{

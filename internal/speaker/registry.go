@@ -160,7 +160,7 @@ func (r *Registry) IdentifyWithQuality(embedding []float32, duration time.Durati
 	r.nextID++
 	r.profiles = append(r.profiles, profile)
 	if err := r.saveLocked(); err != nil {
-		log.Printf("保存声纹注册表失败: %v", err)
+		log.Printf("Failed to save voiceprint registry: %v", err)
 	}
 	return profile.Name
 }

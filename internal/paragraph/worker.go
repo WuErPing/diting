@@ -295,7 +295,7 @@ func (w *Worker) backfill(ctx context.Context) {
 	}
 	segments, err := w.opts.Segments.All()
 	if err != nil {
-		w.opts.Logf("读取历史记录失败，跳过段落回填: %v", err)
+		w.opts.Logf("Failed to read history; skipping paragraph backfill: %v", err)
 		return
 	}
 	if len(segments) == 0 {
@@ -328,7 +328,7 @@ func (w *Worker) backfill(ctx context.Context) {
 		}
 	}
 	if w.backfillN > 0 {
-		w.opts.Logf("段落回填已入队: run=%d 需要模型=%d", w.backfillN, w.backfillLL)
+		w.opts.Logf("Paragraph backfill queued: run=%d model_required=%d", w.backfillN, w.backfillLL)
 	}
 }
 
@@ -428,7 +428,7 @@ func (w *Worker) process(ctx context.Context, job job) {
 			var changed bool
 			result, changed, err = normalizeGroups(result, len(texts))
 			if err == nil && changed {
-				w.opts.Logf("段落边界缺口已自动补齐: segments=%d groups=%d", len(texts), len(result))
+				w.opts.Logf("Paragraph boundary gaps filled automatically: segments=%d groups=%d", len(texts), len(result))
 			}
 		}
 		if ctx.Err() != nil {
@@ -453,7 +453,7 @@ func (w *Worker) process(ctx context.Context, job job) {
 		w.correctParagraphs(ctx, paragraphs)
 	}
 	if err := w.opts.Store.SaveMany(paragraphs); err != nil {
-		w.opts.Logf("保存段落失败: %v", err)
+		w.opts.Logf("Failed to save paragraph: %v", err)
 		return
 	}
 	observability.ParagraphsSaved.Add(uint64(len(paragraphs)))
@@ -552,7 +552,7 @@ func (w *Worker) RetranscribeParagraph(ctx context.Context, id string) (ASRResul
 	}
 	w.fire(selected)
 	w.Reload()
-	w.opts.Logf("段落 ASR 重识别: %d/%d 条录音文本已更新", changed, len(members))
+	w.opts.Logf("Paragraph ASR retranscription: updated transcripts for %d/%d recordings", changed, len(members))
 	return result, nil
 }
 
@@ -652,7 +652,7 @@ func (w *Worker) correctSelected(ctx context.Context, selected []Paragraph) (Cor
 	for _, paragraph := range changed {
 		w.fire(paragraph)
 	}
-	w.opts.Logf("手动语义修正: %d/%d 段已更新", result.Changed, result.Paragraphs)
+	w.opts.Logf("Manual semantic correction: updated %d/%d paragraphs", result.Changed, result.Paragraphs)
 	return result, nil
 }
 
@@ -675,7 +675,7 @@ func (w *Worker) correctParagraphs(ctx context.Context, paragraphs []Paragraph) 
 		if !errors.Is(err, ErrInvalidCorrection) {
 			w.recordFailure()
 		}
-		w.opts.Logf("段落语义修正失败，保留原文: paragraphs=%d err=%v", len(paragraphs), err)
+		w.opts.Logf("Paragraph semantic correction failed; keeping original text: paragraphs=%d err=%v", len(paragraphs), err)
 		return
 	}
 	w.resetFailure()
@@ -687,7 +687,7 @@ func (w *Worker) correctParagraphs(ctx context.Context, paragraphs []Paragraph) 
 		}
 	}
 	if applied > 0 {
-		w.opts.Logf("段落语义修正: %d/%d 段已更新", applied, len(paragraphs))
+		w.opts.Logf("Paragraph semantic correction: updated %d/%d paragraphs", applied, len(paragraphs))
 	}
 }
 

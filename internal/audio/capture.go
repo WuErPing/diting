@@ -15,7 +15,7 @@ type Capture struct {
 
 func StartCapture(output chan<- []float32, dropped *atomic.Uint64) (*Capture, error) {
 	context, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {
-		log.Printf("音频设备: %s", message)
+		log.Printf("Audio device: %s", message)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("initialize audio context: %w", err)

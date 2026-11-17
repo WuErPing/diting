@@ -52,7 +52,7 @@ func encodeAAC(wavPath, m4aPath string) error {
 
 func warnAudioFallback(err error) {
 	fallbackOnce.Do(func() {
-		log.Printf("音频压缩不可用，录音保留为 WAV: %v", err)
+		log.Printf("Audio compression unavailable; keeping recording as WAV: %v", err)
 	})
 }
 

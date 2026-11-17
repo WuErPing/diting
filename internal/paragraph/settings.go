@@ -148,7 +148,7 @@ func (s *Settings) Update(model string, correct bool, providers ...string) error
 	s.asr = provider
 	s.mu.Unlock()
 	s.apply()
-	s.logf("模型设置已更新: 模型=%s 语义修正=%v 语音识别=%s", model, correct, provider)
+	s.logf("Model settings updated: model=%s semantic_correction=%v asr=%s", model, correct, provider)
 	return nil
 }
 
@@ -215,7 +215,7 @@ func (s *Settings) apply() {
 	}
 	if controller != nil {
 		if err := controller.SetASRProvider(provider); err != nil {
-			s.logf("应用语音识别设置失败: %v", err)
+			s.logf("Failed to apply speech recognition settings: %v", err)
 		}
 	}
 }

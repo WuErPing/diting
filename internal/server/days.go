@@ -15,7 +15,7 @@ type daysResponse struct {
 func (s *Server) handleDays(w http.ResponseWriter, _ *http.Request) {
 	days, err := s.store.Days()
 	if err != nil {
-		log.Printf("读取按天归档失败: %v", err)
+		log.Printf("Failed to read daily archive: %v", err)
 		writeError(w, http.StatusInternalServerError, "DAYS_FAILED", "无法读取按天归档")
 		return
 	}
@@ -45,7 +45,7 @@ func (s *Server) handleDeleteDay(w http.ResponseWriter, r *http.Request) {
 	dryRun := r.URL.Query().Get("dryRun") == "1" || r.URL.Query().Get("dryRun") == "true"
 	result, deleteErr := s.store.DeleteDay(date, dryRun)
 	if deleteErr != nil {
-		log.Printf("删除 %s 的数据失败: %v", date, deleteErr)
+		log.Printf("Failed to delete data for %s: %v", date, deleteErr)
 		writeError(w, http.StatusInternalServerError, "DAY_DELETE_FAILED", "删除当天数据失败")
 		return
 	}
@@ -55,7 +55,7 @@ func (s *Server) handleDeleteDay(w http.ResponseWriter, r *http.Request) {
 	}
 	removedParagraphs, cleanupErr := s.finishDayDeletion(result)
 	if cleanupErr != nil {
-		log.Printf("清理 %s 的派生段落失败: %v", date, cleanupErr)
+		log.Printf("Failed to clean up derived paragraphs for %s: %v", date, cleanupErr)
 		writeError(w, http.StatusInternalServerError, "DAY_DELETE_FAILED", "删除当天数据失败")
 		return
 	}

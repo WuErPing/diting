@@ -119,7 +119,7 @@ func New(paths ModelPaths, segmentStore *store.Store, opts Options) (*Engine, er
 		secondaryPaths.ASRDir = paths.SecondaryASRDir
 		secondary, err := NewOnlineRecognizer(secondaryPaths)
 		if err != nil {
-			log.Printf("辅助流式模型不可用，将使用单模型校正: %v", err)
+			log.Printf("Auxiliary streaming model unavailable; using single-model correction: %v", err)
 		} else {
 			engine.secondary = secondary
 		}
@@ -127,11 +127,11 @@ func New(paths ModelPaths, segmentStore *store.Store, opts Options) (*Engine, er
 	if opts.SpeakerRegistry != "" {
 		extractor, err := NewSpeakerExtractor(paths)
 		if err != nil {
-			log.Printf("说话人识别不可用，继续无标签运行: %v", err)
+			log.Printf("Speaker recognition unavailable; continuing without labels: %v", err)
 		} else {
 			registry, err := speaker.Open(opts.SpeakerRegistry, extractor.Dim(), opts.SpeakerThreshold)
 			if err != nil {
-				log.Printf("说话人识别不可用，继续无标签运行: %v", err)
+				log.Printf("Speaker recognition unavailable; continuing without labels: %v", err)
 				sherpa.DeleteSpeakerEmbeddingExtractor(extractor)
 			} else {
 				engine.speakerEx = extractor
@@ -225,7 +225,7 @@ func (e *Engine) Close() {
 	e.Stop()
 	if e.speakers != nil {
 		if err := e.speakers.Save(); err != nil {
-			log.Printf("保存声纹注册表失败: %v", err)
+			log.Printf("Failed to save voiceprint registry: %v", err)
 		}
 	}
 	if e.speakerEx != nil {
@@ -249,7 +249,7 @@ func (e *Engine) IdentifySamples(samples []float32, duration time.Duration) stri
 	embedding, quality := ExtractSpeakerEmbedding(e.speakerEx, samples)
 	if len(embedding) == 0 {
 		e.speakerErrorOne.Do(func() {
-			log.Printf("提取声纹失败，后续片段将不带说话人标签")
+			log.Printf("Voiceprint extraction failed; subsequent segments will not have speaker labels")
 		})
 		return ""
 	}
@@ -296,7 +296,7 @@ func (e *Engine) refineWithAlternatives(samples []float32, online, secondary str
 		if text, err := e.cloudTranscript(samples); err == nil {
 			return e.lexicon.Apply(text)
 		} else {
-			log.Printf("MiMo ASR 暂不可用，本段使用本地识别: %v", err)
+			log.Printf("MiMo ASR temporarily unavailable; using local recognition for this segment: %v", err)
 		}
 	}
 	stream := sherpa.NewOfflineStream(e.refiner)
@@ -399,7 +399,7 @@ func (e *Engine) notifySegment(segment store.Segment) {
 	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			log.Printf("段落合并通知失败: %v", recovered)
+			log.Printf("Paragraph merge notification failed: %v", recovered)
 		}
 	}()
 	e.onSegment(segment)

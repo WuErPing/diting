@@ -88,7 +88,7 @@ func RetranscribeAll(history History, processor Processor) (Stats, error) {
 		samples, err := LoadAudioSamples(path)
 		if err != nil {
 			decodeWarn.Do(func() {
-				log.Printf("部分录音无法解码为 WAV，已跳过: %v", err)
+				log.Printf("Some recordings could not be decoded as WAV and were skipped: %v", err)
 			})
 			stats.MissingAudio++
 			continue
@@ -104,7 +104,7 @@ func RetranscribeAll(history History, processor Processor) (Stats, error) {
 		segment.Speaker = processor.IdentifySamples(samples, time.Duration(segment.DurationMS)*time.Millisecond)
 
 		if (i+1)%50 == 0 {
-			log.Printf("重新转写进度: %d/%d", i+1, len(segments))
+			log.Printf("Retranscription progress: %d/%d", i+1, len(segments))
 		}
 	}
 

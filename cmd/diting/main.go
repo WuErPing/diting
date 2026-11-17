@@ -87,7 +87,7 @@ func main() {
 		cfg.speakerModel = filepath.Join(cfg.models, engine.SpeakerModelName)
 	}
 	if err := run(cfg); err != nil {
-		log.Printf("启动失败: %v", err)
+		log.Printf("Startup failed: %v", err)
 		os.Exit(1)
 	}
 }
@@ -133,7 +133,7 @@ func run(cfg config) error {
 		Logf:       log.Printf,
 	})
 	if err != nil {
-		log.Printf("token 用量统计不可用（不影响转写）: %v", err)
+		log.Printf("Token usage statistics unavailable (transcription is unaffected): %v", err)
 	} else {
 		defer recorder.Close()
 		onUsage = func(model string, usage json.RawMessage, durationMs int64) {
@@ -143,7 +143,7 @@ func run(cfg config) error {
 			}
 			u.DurationMs = durationMs
 			if err := recorder.Record(tokusage.Entry{Client: "diting", Provider: "mimo", Model: model, Usage: u}); err != nil {
-				log.Printf("记录 token 用量失败: %v", err)
+				log.Printf("Failed to record token usage: %v", err)
 			}
 		}
 	}
@@ -198,7 +198,7 @@ func run(cfg config) error {
 	if settings != nil {
 		asrProvider = settings.Snapshot().ASR
 	}
-	log.Printf("ASR 模型: %s", asrModelName(asrProvider))
+	log.Printf("ASR model: %s", asrModelName(asrProvider))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -215,10 +215,10 @@ func run(cfg config) error {
 		worker.Start(ctx)
 		go func() {
 			if err := client.Check(ctx); err != nil {
-				log.Printf("模型服务暂不可用，文稿将先保留整段且暂不生成主题: %v", err)
+				log.Printf("Model service temporarily unavailable; keeping transcripts unmerged and skipping topics: %v", err)
 				return
 			}
-			log.Printf("会议议题模型: %s", settings.Snapshot().Model)
+			log.Printf("Meeting topic model: %s", settings.Snapshot().Model)
 		}()
 	}
 
@@ -238,10 +238,10 @@ func run(cfg config) error {
 
 	if cfg.autostart {
 		if err := recognizer.Start(); err != nil {
-			log.Printf("麦克风尚未启动: %v", err)
+			log.Printf("Microphone not started: %v", err)
 		}
 	}
-	log.Printf("谛听控制台: http://%s", cfg.listen)
+	log.Printf("Diting console: http://%s", cfg.listen)
 
 	var serveErr error
 	select {
@@ -252,7 +252,7 @@ func run(cfg config) error {
 	recognizer.Stop()
 	if worker != nil {
 		if err := worker.Close(); err != nil {
-			log.Printf("关闭段落合并器: %v", err)
+			log.Printf("Error closing paragraph merger: %v", err)
 		}
 	}
 	console.Close()
@@ -461,7 +461,7 @@ func retranscribe(cfg config) error {
 	}
 	client := paragraph.NewClient(paragraph.ClientConfig{BaseURL: cfg.llmURL, APIKey: cfg.llmAPIKey, Model: cfg.llmModel})
 	rebuildStats, err := paragraph.Rebuild(context.Background(), paragraphStore, segments, client, paragraphCorrector(cfg, client),
-		cfg.llmModel, paragraph.RunOptions{}, nil, recognizer.CanonicalSpeaker, progressPrinter("段落重建"))
+		cfg.llmModel, paragraph.RunOptions{}, nil, recognizer.CanonicalSpeaker, progressPrinter("Paragraph rebuild"))
 	if err != nil {
 		return err
 	}
@@ -530,7 +530,7 @@ func reparagraph(cfg config) error {
 	}
 
 	stats, err := paragraph.Rebuild(context.Background(), paragraphStore, segments, client, paragraphCorrector(cfg, client),
-		cfg.llmModel, paragraph.RunOptions{}, nil, resolve, progressPrinter("段落重建"))
+		cfg.llmModel, paragraph.RunOptions{}, nil, resolve, progressPrinter("Paragraph rebuild"))
 	if err != nil {
 		return err
 	}
@@ -652,7 +652,7 @@ func evalSpeakers(cfg config) error {
 		if err != nil {
 			skipped++
 			if skipped <= 3 {
-				log.Printf("跳过 %s: %v", entry.Audio, err)
+				log.Printf("Skipping %s: %v", entry.Audio, err)
 			}
 			continue
 		}
@@ -664,7 +664,7 @@ func evalSpeakers(cfg config) error {
 		embeddings = append(embeddings, embedding)
 		labels = append(labels, entry.Speaker)
 		if (i+1)%50 == 0 {
-			log.Printf("提取进度: %d/%d", i+1, len(entries))
+			log.Printf("Extraction progress: %d/%d", i+1, len(entries))
 		}
 	}
 
