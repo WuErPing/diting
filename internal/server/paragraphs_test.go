@@ -177,7 +177,7 @@ func TestHandleParagraphsRecent(t *testing.T) {
 	}
 	if err := paragraphStore.SaveMany([]paragraph.Paragraph{
 		{ID: "a", StartedAt: segments[0].StartedAt, EndedAt: segments[0].EndedAt, SegmentIDs: []string{"a"}},
-		{ID: "b", StartedAt: segments[1].StartedAt, EndedAt: segments[2].EndedAt, Text: "讨论发布与验收。", SegmentIDs: []string{"b", "c"}, Title: "发布安排", Summary: "讨论发布与验收。"},
+		{ID: "b", StartedAt: segments[1].StartedAt, EndedAt: segments[2].EndedAt, Text: "讨论发布与验收。", SegmentIDs: []string{"b", "c"}, Category: "产品交付", Title: "发布安排", Summary: "讨论发布与验收。"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +192,7 @@ func TestHandleParagraphsRecent(t *testing.T) {
 			ID        string    `json:"id"`
 			StartedAt time.Time `json:"startedAt"`
 			EndedAt   time.Time `json:"endedAt"`
+			Category  string    `json:"category"`
 			Title     string    `json:"title"`
 			Summary   string    `json:"summary"`
 			HasTopic  bool      `json:"hasTopic"`
@@ -201,7 +202,7 @@ func TestHandleParagraphsRecent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(response.Data) != 1 || response.Data[0].ID != "b" || !response.Data[0].EndedAt.Equal(segments[2].EndedAt) ||
-		response.Data[0].Title != "发布安排" || response.Data[0].Summary != "讨论发布与验收。" || !response.Data[0].HasTopic {
+		response.Data[0].Category != "产品交付" || response.Data[0].Title != "发布安排" || response.Data[0].Summary != "讨论发布与验收。" || !response.Data[0].HasTopic {
 		t.Fatalf("response = %+v", response)
 	}
 }

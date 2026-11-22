@@ -1,6 +1,8 @@
 "use strict";
 
 const i18n = window.DitingI18n;
+const { groupTopics } = window.DitingTopics;
+const { renderMarkdown } = window.DitingMarkdown;
 const t = (key, variables) => i18n.t(key, variables);
 
 const elements = {
@@ -103,6 +105,7 @@ let selectedDay = "";
 let activeSpeakerLabel = "";
 let currentASR = "local";
 let currentParagraphs = [];
+const collapsedTopicCategories = new Set();
 let archiveStats = { audioFiles: 0, audioBytes: 0, transcriptChars: 0 };
 
 const previewStorageKey = "diting.previewVisible";
@@ -565,111 +568,6 @@ async function loadSettingsButton() {
   }
 }
 
-function escapeHTML(value) {
-  return value.replace(/[&<>"']/g, (character) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  })[character]);
-}
-
-function renderInline(source) {
-  const escaped = [];
-  const protectedSource = source.replace(/\\([\\`*_[\]<>])/g, (_, character) => {
-    escaped.push(character);
-    return `\u0000${escaped.length - 1}\u0000`;
-  });
-  let html = escapeHTML(protectedSource);
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/\u0000(\d+)\u0000/g, (_, index) => escapeHTML(escaped[Number(index)]));
-  return html;
-}
-
-function renderMarkdown(source) {
-  const lines = source.replace(/\r\n/g, "\n").split("\n");
-  let html = "";
-  let inList = false;
-  let inQuote = false;
-  let paragraph = [];
-
-  const flushParagraph = () => {
-    if (!paragraph.length) return;
-    html += `<p>${paragraph.map(renderInline).join("<br>")}</p>`;
-    paragraph = [];
-  };
-  const closeList = () => {
-    if (inList) {
-      html += "</ul>";
-      inList = false;
-    }
-  };
-  const closeQuote = () => {
-    if (inQuote) {
-      html += "</blockquote>";
-      inQuote = false;
-    }
-  };
-
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-    if (!line.trim()) {
-      flushParagraph();
-      closeList();
-      closeQuote();
-      continue;
-    }
-    if (line.startsWith("### ")) {
-      flushParagraph(); closeList(); closeQuote();
-      html += `<h3>${renderInline(line.slice(4))}</h3>`;
-      continue;
-    }
-    if (line.startsWith("## ")) {
-      flushParagraph(); closeList(); closeQuote();
-      html += `<h2>${renderInline(line.slice(3))}</h2>`;
-      continue;
-    }
-    if (line.startsWith("# ")) {
-      flushParagraph(); closeList(); closeQuote();
-      html += `<h1>${renderInline(line.slice(2))}</h1>`;
-      continue;
-    }
-    if (line.startsWith("> ")) {
-      flushParagraph(); closeList();
-      if (!inQuote) {
-        html += "<blockquote>";
-        inQuote = true;
-      }
-      html += `<p>${renderInline(line.slice(2))}</p>`;
-      continue;
-    }
-    if (line.startsWith("- ")) {
-      flushParagraph(); closeQuote();
-      if (!inList) {
-        html += "<ul>";
-        inList = true;
-      }
-      html += `<li>${renderInline(line.slice(2))}</li>`;
-      continue;
-    }
-    if (/^---+$/.test(line.trim())) {
-      flushParagraph(); closeList(); closeQuote();
-      html += "<hr>";
-      continue;
-    }
-    closeList();
-    closeQuote();
-    paragraph.push(line);
-  }
-
-  flushParagraph();
-  closeList();
-  closeQuote();
-  return html;
-}
-
 function previewQuery() {
   const selection = selectedDay ? `date=${encodeURIComponent(selectedDay)}` : `limit=${previewLimit}`;
   return `${selection}&lang=${i18n.locale}`;
@@ -782,30 +680,54 @@ async function jumpToParagraph(id) {
 }
 
 function renderTopics(paragraphs) {
-  const topics = paragraphs.filter((paragraph) => paragraph.hasTopic !== false);
+  const groups = groupTopics(paragraphs, t("topics.uncategorized"));
   const fragment = document.createDocumentFragment();
-  for (const paragraph of topics) {
-    const item = document.createElement("li");
-    item.className = "topic-item";
-    const time = document.createElement("time");
-    time.dateTime = paragraph.startedAt;
-    const start = paragraphTime(paragraph.startedAt);
-    const end = paragraphTime(paragraph.endedAt);
-    time.textContent = start === end ? start : `${start}–${end}`;
-    const title = document.createElement("h3");
-    title.textContent = paragraph.title || t("topics.untitled");
-    const summary = document.createElement("p");
-    summary.textContent = paragraph.summary || t("topics.noSummary");
-    const link = document.createElement("a");
-    link.className = "topic-link";
-    link.href = `#paragraph-${paragraph.id}`;
-    link.dataset.paragraphId = paragraph.id;
-    link.append(time, title, summary);
-    item.append(link);
-    fragment.append(item);
+  for (const group of groups) {
+    const groupItem = document.createElement("li");
+    groupItem.className = "topic-group";
+    const details = document.createElement("details");
+    details.className = "topic-category";
+    details.dataset.category = group.category;
+    details.open = !collapsedTopicCategories.has(group.category);
+    const category = document.createElement("summary");
+    category.className = "topic-category-summary";
+    const categoryName = document.createElement("span");
+    categoryName.className = "topic-category-name";
+    categoryName.textContent = group.category;
+    const count = document.createElement("span");
+    count.className = "topic-category-count";
+    count.textContent = t("topics.count", { count: group.topics.length });
+    category.append(categoryName, count);
+
+    const children = document.createElement("ol");
+    children.className = "topic-sublist";
+    for (const paragraph of group.topics) {
+      const item = document.createElement("li");
+      item.className = "topic-item";
+      const time = document.createElement("time");
+      time.dateTime = paragraph.startedAt;
+      const start = paragraphTime(paragraph.startedAt);
+      const end = paragraphTime(paragraph.endedAt);
+      time.textContent = start === end ? start : `${start}–${end}`;
+      const title = document.createElement("h3");
+      title.textContent = paragraph.title || t("topics.untitled");
+      const summary = document.createElement("div");
+      summary.className = "topic-summary markdown-body";
+      summary.innerHTML = renderMarkdown(paragraph.summary || t("topics.noSummary"));
+      const link = document.createElement("a");
+      link.className = "topic-link";
+      link.href = `#paragraph-${paragraph.id}`;
+      link.dataset.paragraphId = paragraph.id;
+      link.append(time, title, summary);
+      item.append(link);
+      children.append(item);
+    }
+    details.append(category, children);
+    groupItem.append(details);
+    fragment.append(groupItem);
   }
   elements.topicList.replaceChildren(fragment);
-  elements.topicsEmpty.hidden = topics.length > 0;
+  elements.topicsEmpty.hidden = groups.length > 0;
   elements.topicsEmpty.textContent = t("topics.empty");
 }
 
@@ -1235,6 +1157,15 @@ elements.markdownPreview.addEventListener("click", (event) => {
   const speaker = event.target.closest(".md-speaker");
   if (speaker && speaker.dataset.label) openSpeakerDialog(speaker.dataset.label);
 });
+elements.topicList.addEventListener("toggle", (event) => {
+  const details = event.target.closest(".topic-category");
+  if (!details) return;
+  if (details.open) {
+    collapsedTopicCategories.delete(details.dataset.category);
+  } else {
+    collapsedTopicCategories.add(details.dataset.category);
+  }
+}, true);
 elements.topicList.addEventListener("click", (event) => {
   const link = event.target.closest(".topic-link");
   if (!link || !link.dataset.paragraphId) return;

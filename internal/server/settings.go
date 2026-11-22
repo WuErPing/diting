@@ -185,6 +185,7 @@ type paragraphMetadata struct {
 	ID        string    `json:"id"`
 	StartedAt time.Time `json:"startedAt"`
 	EndedAt   time.Time `json:"endedAt"`
+	Category  string    `json:"category"`
 	Title     string    `json:"title"`
 	Summary   string    `json:"summary"`
 	HasTopic  bool      `json:"hasTopic"`
@@ -230,7 +231,7 @@ func (s *Server) handleParagraphs(w http.ResponseWriter, r *http.Request) {
 	for _, item := range selected {
 		data = append(data, paragraphMetadata{
 			ID: item.ID, StartedAt: item.StartedAt, EndedAt: item.EndedAt,
-			Title: item.TopicTitle(), Summary: item.TopicSummary(), HasTopic: item.HasTopic(),
+			Category: item.TopicCategory(), Title: item.TopicTitle(), Summary: item.TopicSummary(), HasTopic: item.HasTopic(),
 		})
 	}
 	writeJSON(w, http.StatusOK, struct {

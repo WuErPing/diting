@@ -662,10 +662,15 @@ components:
           type: integer
         source:
           type: string
+        category:
+          type: string
+          description: 大主题分类；旧数据可能为空
         title:
           type: string
+          description: 简短的小主题标题
         summary:
           type: string
+          description: 简明总结，可包含行内 Markdown
         hasTopic:
           type: boolean
     SegmentDeleteResponse:

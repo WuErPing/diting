@@ -48,7 +48,7 @@ const (
 const correctionChunkRunes = 500
 
 const systemPrompt = "你是会议议题分析助手。输入是带说话人标签的连续转写，说话人变化不代表议题变化。" +
-	"把围绕同一问题、目标或决策的连续发言归为同一会议议题，再为议题生成具体名称和简明介绍。" +
+	"把围绕同一问题、目标或决策的连续发言归为同一会议议题，再用稳定的大主题归类，并生成简短的小主题名称和简明介绍。" +
 	"只有包含实质观点、问题、事实、方案、决策、分歧、任务或行动项的段落才标记 valuable=true；" +
 	"寒暄、闲聊、语气词、重复确认和无信息过渡标记 valuable=false，不要为了覆盖所有语句而制造主题。" +
 	"必须完整覆盖 1..N、连续且无重叠；不新增、删除或改写原文；只输出 JSON。"
@@ -537,11 +537,12 @@ func (c *Client) chatRequest(texts []string) chatRequest {
 								"properties": map[string]any{
 									"start":    map[string]any{"type": "integer"},
 									"end":      map[string]any{"type": "integer"},
+									"category": map[string]any{"type": "string"},
 									"title":    map[string]any{"type": "string"},
 									"summary":  map[string]any{"type": "string"},
 									"valuable": map[string]any{"type": "boolean"},
 								},
-								"required":             []string{"start", "end", "title", "summary", "valuable"},
+								"required":             []string{"start", "end", "category", "title", "summary", "valuable"},
 								"additionalProperties": false,
 							},
 						},
@@ -577,8 +578,9 @@ func BuildPrompt(texts []string) string {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, line)
 	}
 	fmt.Fprintf(&b, "\n按会议议题切分连续发言，完整覆盖 1..%d，不重叠。同一议题可以包含多人的问答、讨论、决策和行动项；不要按说话人切分。"+
-		"每段提供不超过 12 字的具体议题名称 title、不超过 50 字且包含结论或待办的简明介绍 summary，以及布尔值 valuable。"+
-		"有实质讨论价值时 valuable=true；寒暄、闲聊、语气词、重复确认和无信息过渡时 valuable=false，title 和 summary 留空。只输出 JSON。\n/no_think", len(texts))
+		"每段提供不超过 8 字的大主题 category、不超过 12 字的小主题 title、不超过 50 字且明确包含结论或待办的 summary，以及布尔值 valuable。"+
+		"相同领域复用同一个 category，title 要具体且不重复 category；summary 只写一两句，可用 **加粗** 或 `代码` 等行内 Markdown，不使用标题或列表。"+
+		"有实质讨论价值时 valuable=true；寒暄、闲聊、语气词、重复确认和无信息过渡时 valuable=false，category、title 和 summary 留空。只输出 JSON。\n/no_think", len(texts))
 	return b.String()
 }
 
@@ -668,6 +670,7 @@ func parseGroups(raw string, n int) ([]Group, error) {
 		Paragraphs []struct {
 			Start    flexInt `json:"start"`
 			End      flexInt `json:"end"`
+			Category string  `json:"category"`
 			Title    string  `json:"title"`
 			Summary  string  `json:"summary"`
 			Valuable *bool   `json:"valuable"`
@@ -679,7 +682,7 @@ func parseGroups(raw string, n int) ([]Group, error) {
 	groups := make([]Group, 0, len(payload.Paragraphs))
 	for _, item := range payload.Paragraphs {
 		groups = append(groups, Group{
-			Start: int(item.Start), End: int(item.End), Title: item.Title, Summary: item.Summary,
+			Start: int(item.Start), End: int(item.End), Category: item.Category, Title: item.Title, Summary: item.Summary,
 			TopicExcluded: item.Valuable != nil && !*item.Valuable,
 		})
 	}

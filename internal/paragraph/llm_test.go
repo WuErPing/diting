@@ -59,7 +59,7 @@ func TestClientGroupSendsExpectedRequest(t *testing.T) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Errorf("path = %s", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(chatCompletion(`{"paragraphs":[{"start":1,"end":2,"title":"发布安排","summary":"讨论产品发布与验收。"}]}`, "stop")))
+		_, _ = w.Write([]byte(chatCompletion(`{"paragraphs":[{"start":1,"end":2,"category":"产品交付","title":"发布安排","summary":"讨论产品发布与验收。"}]}`, "stop")))
 	}))
 	defer server.Close()
 
@@ -68,7 +68,7 @@ func TestClientGroupSendsExpectedRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(groups) != 1 || groups[0] != (Group{Start: 1, End: 2, Title: "发布安排", Summary: "讨论产品发布与验收。"}) {
+	if len(groups) != 1 || groups[0] != (Group{Start: 1, End: 2, Category: "产品交付", Title: "发布安排", Summary: "讨论产品发布与验收。"}) {
 		t.Fatalf("groups = %v", groups)
 	}
 
@@ -98,6 +98,9 @@ func TestClientGroupSendsExpectedRequest(t *testing.T) {
 	paragraphsSchema, _ := properties["paragraphs"].(map[string]any)
 	items, _ := paragraphsSchema["items"].(map[string]any)
 	itemProperties, _ := items["properties"].(map[string]any)
+	if _, ok := itemProperties["category"]; !ok {
+		t.Fatalf("topic schema lacks category: %v", itemProperties)
+	}
 	if _, ok := itemProperties["valuable"]; !ok {
 		t.Fatalf("topic schema lacks valuable flag: %v", itemProperties)
 	}
@@ -107,7 +110,7 @@ func TestClientGroupSendsExpectedRequest(t *testing.T) {
 	}
 	user, _ := messages[1].(map[string]any)
 	prompt, _ := user["content"].(string)
-	for _, want := range []string{"共 2 句", "1. 你好", "2. （无文字）", "1..2", "会议议题", "决策", "行动项", "寒暄", "valuable", "/no_think"} {
+	for _, want := range []string{"共 2 句", "1. 你好", "2. （无文字）", "1..2", "会议议题", "决策", "行动项", "寒暄", "category", "行内 Markdown", "valuable", "/no_think"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
@@ -128,6 +131,7 @@ func TestParseGroupsVariants(t *testing.T) {
 		{"float and string", `{"paragraphs":[{"start":1.0,"end":"3"}]}`, 3, []Group{{Start: 1, End: 3}}, true},
 		{"low value", `{"paragraphs":[{"start":1,"end":3,"valuable":false}]}`, 3, []Group{{Start: 1, End: 3, TopicExcluded: true}}, true},
 		{"valuable", `{"paragraphs":[{"start":1,"end":3,"valuable":true}]}`, 3, []Group{{Start: 1, End: 3}}, true},
+		{"hierarchical topic", `{"paragraphs":[{"start":1,"end":3,"category":"产品交付","title":"发布安排","summary":"确定**周五**发布。"}]}`, 3, []Group{{Start: 1, End: 3, Category: "产品交付", Title: "发布安排", Summary: "确定**周五**发布。"}}, true},
 		{"top level array", `[{"start":1,"end":3}]`, 3, nil, false},
 		{"empty content", `   `, 3, nil, false},
 		{"invalid json", `{"paragraphs":`, 3, nil, false},

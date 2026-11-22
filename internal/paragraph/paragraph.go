@@ -26,6 +26,7 @@ type Paragraph struct {
 	EndedAt       time.Time `json:"endedAt"`
 	Speaker       string    `json:"speaker,omitempty"`
 	Text          string    `json:"text"`
+	Category      string    `json:"category,omitempty"`
 	Title         string    `json:"title,omitempty"`
 	Summary       string    `json:"summary,omitempty"`
 	Digest        string    `json:"digest,omitempty"`
@@ -44,8 +45,15 @@ func (p Paragraph) HasTopic() bool {
 	return !p.TopicExcluded && hasTopicText(p.Text)
 }
 
-// TopicTitle and TopicSummary also provide useful labels for paragraphs saved
-// before topic metadata was introduced.
+// TopicCategory, TopicTitle and TopicSummary also provide useful labels for
+// paragraphs saved before topic metadata was introduced.
+func (p Paragraph) TopicCategory() string {
+	if !p.HasTopic() {
+		return ""
+	}
+	return truncateTopicText(compactTopicText(p.Category), 8)
+}
+
 func (p Paragraph) TopicTitle() string {
 	if !p.HasTopic() {
 		return ""
@@ -108,7 +116,7 @@ func topicTitle(title, text string) string {
 	if title == "" {
 		return "无文字段落"
 	}
-	return truncateTopicText(title, 20)
+	return truncateTopicText(title, 12)
 }
 
 func topicSummary(summary, text string) string {
@@ -119,7 +127,7 @@ func topicSummary(summary, text string) string {
 	if summary == "" {
 		return "该段没有可识别的文字。"
 	}
-	return truncateTopicText(summary, 100)
+	return truncateTopicText(summary, 50)
 }
 
 func compactTopicText(text string) string {
@@ -137,6 +145,7 @@ func truncateTopicText(text string, limit int) string {
 type Group struct {
 	Start         int
 	End           int
+	Category      string
 	Title         string
 	Summary       string
 	TopicExcluded bool
@@ -287,8 +296,9 @@ func ComposeParagraphs(run []store.Segment, groups []Group, source, model string
 			}
 		}
 		text := JoinTexts(members)
-		title, summary := "", ""
+		category, title, summary := "", "", ""
 		if !group.TopicExcluded && hasTopicText(text) {
+			category = truncateTopicText(compactTopicText(group.Category), 8)
 			title = topicTitle(group.Title, text)
 			summary = topicSummary(group.Summary, text)
 		}
@@ -298,6 +308,7 @@ func ComposeParagraphs(run []store.Segment, groups []Group, source, model string
 			EndedAt:       members[len(members)-1].EndedAt,
 			Speaker:       speaker,
 			Text:          text,
+			Category:      category,
 			Title:         title,
 			Summary:       summary,
 			TopicExcluded: group.TopicExcluded,

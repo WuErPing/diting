@@ -2,6 +2,7 @@ package paragraph
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,7 +177,7 @@ func TestComposeParagraphsKeepsVerbatimTextAndIDs(t *testing.T) {
 	now := testBase.Add(time.Hour)
 
 	paragraphs := ComposeParagraphs([]store.Segment{a, b, c}, []Group{
-		{Start: 1, End: 2, Title: "问候", Summary: "中英文问候。"},
+		{Start: 1, End: 2, Category: "日常沟通", Title: "问候", Summary: "确定 **周五** 发布。"},
 		{Start: 3, End: 3},
 	}, SourceLLM, "model-x", now, nil)
 	if len(paragraphs) != 2 {
@@ -189,10 +190,10 @@ func TestComposeParagraphsKeepsVerbatimTextAndIDs(t *testing.T) {
 	if first.Text != "你好world" {
 		t.Fatalf("first text = %q", first.Text)
 	}
-	if first.Title != "问候" || first.Summary != "中英文问候。" || !first.HasTopic() {
-		t.Fatalf("first topic = %q / %q", first.Title, first.Summary)
+	if first.Category != "日常沟通" || first.Title != "问候" || first.Summary != "确定 **周五** 发布。" || !first.HasTopic() {
+		t.Fatalf("first topic = %q / %q / %q", first.Category, first.Title, first.Summary)
 	}
-	if second := paragraphs[1]; second.Title != "" || second.Summary != "" || second.HasTopic() {
+	if second := paragraphs[1]; second.Category != "" || second.Title != "" || second.Summary != "" || second.HasTopic() {
 		t.Fatalf("empty paragraph topic = %q / %q", second.Title, second.Summary)
 	}
 	if first.Speaker != "说话人1" || first.Source != SourceLLM || first.Model != "model-x" {
@@ -204,6 +205,20 @@ func TestComposeParagraphsKeepsVerbatimTextAndIDs(t *testing.T) {
 	second := paragraphs[1]
 	if second.ID != "c" || second.Text != "" || second.SegmentCount() != 1 {
 		t.Fatalf("second = %+v", second)
+	}
+}
+
+func TestComposeParagraphsConstrainsTopicMetadata(t *testing.T) {
+	segment := testSegment("a", "说话人1", "讨论发布安排。", testBase, testBase.Add(time.Second))
+	paragraphs := ComposeParagraphs([]store.Segment{segment}, []Group{{
+		Start: 1, End: 1,
+		Category: strings.Repeat("类", 9),
+		Title:    strings.Repeat("题", 13),
+		Summary:  strings.Repeat("短", 51),
+	}}, SourceLLM, "m", testBase, nil)
+	topic := paragraphs[0]
+	if topic.Category != strings.Repeat("类", 7)+"…" || topic.Title != strings.Repeat("题", 11)+"…" || topic.Summary != strings.Repeat("短", 49)+"…" {
+		t.Fatalf("topic metadata = %+v", topic)
 	}
 }
 
