@@ -63,10 +63,14 @@ test("daily meeting minutes have localized actions and errors", () => {
   const i18n = createI18n({ storage: null, languages: ["en-US"] });
   assert.equal(i18n.t("minutes.generate"), "Generate meeting minutes");
   assert.equal(i18n.t("minutes.generating"), "Generating meeting minutes…");
+  assert.match(i18n.t("minutes.working"), /close this window/);
+  assert.equal(i18n.t("minutes.closeBackground"), "Close and keep generating");
   assert.equal(i18n.t("minutes.download"), "Download Markdown");
   assert.equal(i18n.apiError({ code: "DAY_NOT_FOUND" }), "No transcripts are available for this day");
   i18n.setLocale("zh");
   assert.equal(i18n.t("minutes.generate"), "生成会议纪要");
+  assert.match(i18n.t("minutes.working"), /关闭此窗口，生成会继续/);
+  assert.equal(i18n.t("minutes.closeBackground"), "关闭窗口，继续生成");
   assert.equal(i18n.apiError({ code: "DAY_SUMMARY_FAILED" }), "会议纪要生成失败，请检查模型设置和网络");
 });
 

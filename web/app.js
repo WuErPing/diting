@@ -358,6 +358,9 @@ function renderCalendar() {
 }
 
 function renderDayDetail() {
+  const minutesCloseKey = summarizingDay ? "minutes.closeBackground" : "minutes.close";
+  elements.minutesCloseButton.textContent = t(minutesCloseKey);
+  elements.minutesCloseIcon.setAttribute("aria-label", t(minutesCloseKey));
   const day = selectedDay ? calendarDays.get(selectedDay) : undefined;
   elements.calendarDetail.hidden = !day;
   for (const cell of elements.calendarGrid.querySelectorAll(".calendar-cell")) {
