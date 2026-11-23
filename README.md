@@ -47,7 +47,7 @@ go build -o bin/diting ./cmd/diting
 - [使用说明](docs/USAGE.md)：安装启动、控制台、命令行、数据维护与 API。
 - [更新日志](CHANGELOG.md)：按功能主题汇总用户可见变更。
 - [技术规范](SPEC.md)：架构、边界、接口契约与验收标准。
-- [OpenAPI 契约](api/openapi.yaml)：HTTP API 的机器可读定义。
+- [OpenAPI 契约](api/openapi.yaml)：HTTP API 的机器可读定义（[English](api/openapi.en.yaml)）。
 
 ### 开发验证
 
@@ -96,14 +96,14 @@ Listening starts automatically by default. To start it manually instead:
 ./bin/diting -autostart=false
 ```
 
-Press `Ctrl+C` to stop the service. See the [Usage Guide](docs/USAGE.md) for all options, model configuration, console operations, data management, and API details.
+Press `Ctrl+C` to stop the service. See the [Usage Guide](docs/USAGE.md#english) for all options, model configuration, console operations, data management, and API details.
 
 ### Documentation
 
-- [Usage Guide](docs/USAGE.md): Installation, startup, console, CLI, data maintenance, and APIs.
-- [Changelog](CHANGELOG.md): User-visible changes grouped by feature area.
-- [Technical Specification](SPEC.md): Architecture, boundaries, API contracts, and acceptance criteria.
-- [OpenAPI Specification](api/openapi.yaml): Machine-readable HTTP API definition.
+- [Usage Guide](docs/USAGE.md#english): Installation, startup, console, CLI, data maintenance, and APIs.
+- [Changelog](CHANGELOG.md#english): User-visible changes grouped by feature area.
+- [Technical Specification](SPEC.md#english): Architecture, boundaries, API contracts, and acceptance criteria.
+- [OpenAPI Specification](api/openapi.en.yaml): Machine-readable HTTP API definition ([中文版](api/openapi.yaml)).
 
 ### Development Checks
 
