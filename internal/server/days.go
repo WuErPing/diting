@@ -3,13 +3,19 @@ package server
 import (
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"diting/internal/store"
 )
 
+type dayView struct {
+	store.DayStat
+	Minutes bool `json:"minutes"`
+}
+
 type daysResponse struct {
-	Days []store.DayStat `json:"days"`
+	Days []dayView `json:"days"`
 }
 
 func (s *Server) handleDays(w http.ResponseWriter, _ *http.Request) {
@@ -19,10 +25,30 @@ func (s *Server) handleDays(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, "DAYS_FAILED", "无法读取按天归档")
 		return
 	}
-	if days == nil {
-		days = []store.DayStat{}
+	minutesDates, err := s.store.MinutesDates()
+	if err != nil {
+		log.Printf("Failed to list saved meeting minutes: %v", err)
+		writeError(w, http.StatusInternalServerError, "DAYS_FAILED", "无法读取按天归档")
+		return
 	}
-	writeJSON(w, http.StatusOK, daysResponse{Days: days})
+	withMinutes := make(map[string]bool, len(minutesDates))
+	for _, date := range minutesDates {
+		withMinutes[date] = true
+	}
+	views := make([]dayView, 0, len(days)+len(minutesDates))
+	seen := make(map[string]bool, len(days))
+	for _, day := range days {
+		views = append(views, dayView{DayStat: day, Minutes: withMinutes[day.Date]})
+		seen[day.Date] = true
+	}
+	// Keep days whose transcripts were deleted but whose minutes remain.
+	for _, date := range minutesDates {
+		if !seen[date] {
+			views = append(views, dayView{DayStat: store.DayStat{Date: date}, Minutes: true})
+		}
+	}
+	sort.Slice(views, func(i, j int) bool { return views[i].Date < views[j].Date })
+	writeJSON(w, http.StatusOK, daysResponse{Days: views})
 }
 
 type deleteDayResponse struct {
@@ -58,6 +84,9 @@ func (s *Server) handleDeleteDay(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Failed to clean up derived paragraphs for %s: %v", date, cleanupErr)
 		writeError(w, http.StatusInternalServerError, "DAY_DELETE_FAILED", "删除当天数据失败")
 		return
+	}
+	if err := s.store.DeleteMinutes(date); err != nil {
+		log.Printf("Failed to delete meeting minutes for %s: %v", date, err)
 	}
 
 	if s.hub != nil {

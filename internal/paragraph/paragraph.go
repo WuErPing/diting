@@ -18,6 +18,7 @@ const (
 const (
 	defaultMaxSegments = 20
 	defaultMaxChars    = 3000
+	defaultMaxSilence  = 10 * time.Minute
 )
 
 type Paragraph struct {
@@ -154,6 +155,7 @@ type Group struct {
 type RunOptions struct {
 	MaxSegments int
 	MaxChars    int
+	MaxSilence  time.Duration
 }
 
 func (o RunOptions) withDefaults() RunOptions {
@@ -163,12 +165,15 @@ func (o RunOptions) withDefaults() RunOptions {
 	if o.MaxChars <= 0 {
 		o.MaxChars = defaultMaxChars
 	}
+	if o.MaxSilence <= 0 {
+		o.MaxSilence = defaultMaxSilence
+	}
 	return o
 }
 
 // BuildRuns keeps speaker turns together so the model can identify complete
-// meeting topics. Segment and character caps bound the prompt size; an oversized
-// single segment still forms a run.
+// meeting topics. Long silences start a new large time period. Segment and
+// character caps bound the prompt size; an oversized single segment still forms a run.
 func BuildRuns(segments []store.Segment, opts RunOptions) [][]store.Segment {
 	opts = opts.withDefaults()
 	var runs [][]store.Segment
@@ -177,7 +182,9 @@ func BuildRuns(segments []store.Segment, opts RunOptions) [][]store.Segment {
 	for _, segment := range segments {
 		length := len([]rune(strings.TrimSpace(segment.Text)))
 		if len(current) > 0 {
-			if len(current)+1 > opts.MaxSegments ||
+			previous := current[len(current)-1]
+			if segment.StartedAt.Sub(previous.EndedAt) >= opts.MaxSilence ||
+				len(current)+1 > opts.MaxSegments ||
 				chars+length > opts.MaxChars {
 				runs = append(runs, current)
 				current = nil
@@ -235,9 +242,9 @@ func isASCIIWord(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 }
 
-// NormalizeGroups repairs gaps in model output by pulling each group's start
-// back to the first uncovered sentence; a trailing gap extends the last group.
-// Overlapping, reversed or out-of-range groups are still errors.
+// NormalizeGroups repairs gaps and repeated coverage in model output. Each
+// remaining group starts at the first uncovered sentence; a trailing gap extends
+// the last group. Reversed or out-of-range groups are still errors.
 func NormalizeGroups(groups []Group, n int) ([]Group, bool, error) {
 	if n <= 0 {
 		return nil, false, fmt.Errorf("no sentences to group")
@@ -245,22 +252,29 @@ func NormalizeGroups(groups []Group, n int) ([]Group, bool, error) {
 	if len(groups) == 0 {
 		return nil, false, fmt.Errorf("grouping is empty")
 	}
-	repaired := make([]Group, len(groups))
+	repaired := make([]Group, 0, len(groups))
 	expected := 1
 	changed := false
 	for i, group := range groups {
-		if group.End < group.Start || group.End > n {
+		if group.Start < 1 || group.End > n {
 			return nil, false, fmt.Errorf("paragraph %d has invalid range %d-%d", i+1, group.Start, group.End)
 		}
-		if group.Start < expected {
-			return nil, false, fmt.Errorf("paragraph %d starts at %d, overlapping the covered range", i+1, group.Start)
+		if group.End < expected {
+			changed = true
+			continue
 		}
-		if group.Start > expected {
+		if group.End < group.Start {
+			return nil, false, fmt.Errorf("paragraph %d has invalid range %d-%d", i+1, group.Start, group.End)
+		}
+		if group.Start != expected {
 			group.Start = expected
 			changed = true
 		}
-		repaired[i] = group
+		repaired = append(repaired, group)
 		expected = group.End + 1
+	}
+	if len(repaired) == 0 {
+		return nil, false, fmt.Errorf("grouping has no uncovered sentences")
 	}
 	if expected <= n {
 		repaired[len(repaired)-1].End = n

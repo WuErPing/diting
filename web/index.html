@@ -9,6 +9,7 @@
   <script src="/i18n.js" defer></script>
   <script src="/topics.js" defer></script>
   <script src="/markdown.js" defer></script>
+  <script src="/voice-state.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -20,6 +21,12 @@
           <p class="eyebrow">LOCAL SPEECH ARCHIVE</p>
           <h1 data-i18n="brand.name">Diting</h1>
           <p class="tagline" data-i18n="tagline.home">Voices only. Every word, timed.</p>
+        </div>
+        <div class="voice-state is-waiting" id="voiceState" role="status" hidden>
+          <span class="voice-state-bars" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span>
+          </span>
+          <span class="voice-state-label" id="voiceStateLabel" data-i18n="voice.waiting">Waiting for speech</span>
         </div>
       </div>
       <div class="masthead-actions">
@@ -88,6 +95,7 @@
               <div><dt data-i18n="calendar.recordings">Recordings</dt><dd><span id="calendarDetailFiles">0</span> <span data-i18n="unit.files">files</span></dd></div>
               <div><dt data-i18n="calendar.usage">Storage</dt><dd id="calendarDetailSize">0 B</dd></div>
             </dl>
+            <button class="primary-button minutes-open-button" id="calendarOpenMinutesButton" type="button" data-i18n="minutes.open" hidden>Open meeting minutes</button>
             <button class="primary-button" id="calendarSummaryButton" type="button" data-i18n="minutes.generate">Generate meeting minutes</button>
             <button class="danger-button" id="calendarDeleteButton" type="button" data-i18n="action.moveTrash">Move to Trash</button>
           </div>
@@ -99,24 +107,7 @@
         </section>
       </aside>
 
-      <section class="transcript-panel" aria-labelledby="liveTitle">
-        <div class="transcript-header">
-          <div>
-            <p class="eyebrow">LIVE TRANSCRIPT</p>
-            <h2 id="liveTitle" data-i18n="live.title">Now</h2>
-          </div>
-          <div class="transcript-actions">
-            <a class="text-button" href="/records.html" data-i18n="action.records">Voice records</a>
-            <button class="text-button" id="showPreviewButton" type="button" data-i18n="preview.show" hidden>Show transcript</button>
-          </div>
-        </div>
-
-        <div class="live-now" data-i18n-aria-label="live.label" aria-label="Current recognized text">
-          <span class="live-marker" aria-hidden="true">NOW</span>
-          <p id="interimText" data-i18n="live.connecting">Connecting to the local service…</p>
-          <span class="live-time" id="liveTime"></span>
-        </div>
-
+      <div class="transcript-panel">
         <section class="preview-panel" id="previewPanel" aria-labelledby="previewTitle">
           <div class="preview-header">
             <div>
@@ -124,6 +115,8 @@
               <h2 id="previewTitle" data-i18n="preview.title">Merged transcript</h2>
             </div>
             <div class="preview-actions">
+              <a class="text-button" href="/records.html" data-i18n="action.records">Voice records</a>
+              <button class="text-button" id="showPreviewButton" type="button" data-i18n="preview.show" hidden>Show transcript</button>
               <button class="text-button" id="splitParagraphsButton" type="button" data-i18n="preview.split" data-i18n-title="preview.splitTitle" title="Use the current model to split the latest 500 records by meeting topic. Original transcripts remain unchanged" hidden>Split by topic</button>
               <a class="text-button" id="markdownDownload" href="/api/markdown?download=1&lang=en" data-i18n="preview.download" download>Download .md</a>
               <button class="icon-button" id="hidePreviewButton" type="button" data-i18n-aria-label="preview.hideLabel" data-i18n-title="preview.hide" aria-label="Hide merged transcript preview" title="Hide preview">×</button>
@@ -138,7 +131,7 @@
             </div>
           </div>
         </section>
-      </section>
+      </div>
 
       <aside class="topics-panel" aria-labelledby="topicsTitle">
         <div class="topics-header">
@@ -163,6 +156,7 @@
         <div>
           <h2 id="minutesDialogTitle" data-i18n="minutes.title">Daily meeting minutes</h2>
           <p class="dialog-hint" id="minutesDialogDate"></p>
+          <p class="dialog-hint minutes-generated-at" id="minutesGeneratedAt" hidden></p>
         </div>
         <button class="icon-button" id="minutesCloseIcon" type="button" data-i18n-aria-label="minutes.close" aria-label="Close">×</button>
       </div>

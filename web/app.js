@@ -1,8 +1,9 @@
 "use strict";
 
 const i18n = window.DitingI18n;
-const { groupTopics } = window.DitingTopics;
+const { groupTopics, topicGroupOpen } = window.DitingTopics;
 const { renderMarkdown } = window.DitingMarkdown;
+const { voicePresentation } = window.DitingVoiceState;
 const t = (key, variables) => i18n.t(key, variables);
 
 const elements = {
@@ -24,8 +25,8 @@ const elements = {
   archiveFiles: document.querySelector("#archiveFiles"),
   archiveSize: document.querySelector("#archiveSize"),
   archiveChars: document.querySelector("#archiveChars"),
-  interimText: document.querySelector("#interimText"),
-  liveTime: document.querySelector("#liveTime"),
+  voiceState: document.querySelector("#voiceState"),
+  voiceStateLabel: document.querySelector("#voiceStateLabel"),
   previewPanel: document.querySelector("#previewPanel"),
   previewNote: document.querySelector("#previewNote"),
   splitParagraphsButton: document.querySelector("#splitParagraphsButton"),
@@ -49,9 +50,11 @@ const elements = {
   calendarDetailFiles: document.querySelector("#calendarDetailFiles"),
   calendarDetailSize: document.querySelector("#calendarDetailSize"),
   calendarSummaryButton: document.querySelector("#calendarSummaryButton"),
+  calendarOpenMinutesButton: document.querySelector("#calendarOpenMinutesButton"),
   calendarDeleteButton: document.querySelector("#calendarDeleteButton"),
   minutesDialog: document.querySelector("#minutesDialog"),
   minutesDialogDate: document.querySelector("#minutesDialogDate"),
+  minutesGeneratedAt: document.querySelector("#minutesGeneratedAt"),
   minutesStatus: document.querySelector("#minutesStatus"),
   minutesError: document.querySelector("#minutesError"),
   minutesContent: document.querySelector("#minutesContent"),
@@ -85,7 +88,7 @@ for (const element of [
   elements.toggleButton,
   elements.privacyTitle,
   elements.privacyText,
-  elements.interimText,
+  elements.voiceStateLabel,
   elements.speakerMergeHint,
   elements.splitParagraphsButton,
   elements.topicsEmpty,
@@ -98,6 +101,8 @@ for (const element of [
 const calendarDays = new Map();
 const speakerViews = new Map();
 let currentStatus = { state: "STOPPED", startedAt: null };
+let speaking = false;
+let speakingTimer;
 let requestPending = false;
 let eventSource;
 let calendarCursor = startOfMonth(new Date());
@@ -106,6 +111,7 @@ let activeSpeakerLabel = "";
 let currentASR = "local";
 let currentParagraphs = [];
 const collapsedTopicCategories = new Set();
+const expandedTopicCategories = new Set();
 let archiveStats = { audioFiles: 0, audioBytes: 0, transcriptChars: 0 };
 
 const previewStorageKey = "diting.previewVisible";
@@ -120,7 +126,9 @@ let retranscribingPreview = false;
 let summarizingPreview = false;
 let paragraphCorrectionAvailable = false;
 let summarizingDay = false;
+let loadingMinutes = false;
 let activeMinutesDate = "";
+let activeMinutesGeneratedAt = "";
 let minutesDownloadURL = "";
 
 function readPreviewPreference() {
@@ -162,7 +170,22 @@ function formatUptime(startedAt) {
   return `${hours}:${minutes}:${remaining}`;
 }
 
-function updateStatus(status, preserveInterim = false) {
+function updateVoiceIndicator() {
+  const presentation = voicePresentation(currentStatus.state, speaking);
+  elements.voiceState.hidden = presentation.hidden;
+  elements.voiceState.classList.toggle("is-waiting", presentation.mode === "waiting");
+  elements.voiceState.classList.toggle("is-speaking", presentation.mode === "speaking");
+  if (presentation.labelKey) elements.voiceStateLabel.textContent = t(presentation.labelKey);
+}
+
+function setSpeaking(active) {
+  clearTimeout(speakingTimer);
+  speaking = active;
+  if (active) speakingTimer = setTimeout(() => setSpeaking(false), 1200);
+  updateVoiceIndicator();
+}
+
+function updateStatus(status) {
   currentStatus = status;
   const running = status.state === "RUNNING";
   const stopping = status.state === "STOPPING";
@@ -181,25 +204,12 @@ function updateStatus(status, preserveInterim = false) {
   elements.droppedChunks.textContent = status.droppedChunks || 0;
   if (!running && stopping === false) elements.uptime.textContent = "00:00:00";
   showError(status.lastError || "");
-  if (preserveInterim) return;
-  if (!running && !stopping) {
-    elements.interimText.textContent = t("live.stopped");
-    elements.liveTime.textContent = "";
-    hideLivePreview();
-  } else if (running && !elements.liveTime.textContent) {
-    elements.interimText.textContent = t("live.waiting");
+  if (!running) {
+    setSpeaking(false);
+  } else {
+    updateVoiceIndicator();
   }
-}
-
-function formatTime(value) {
-  return new Intl.DateTimeFormat(i18n.localeTag, {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(new Date(value));
+  if (!running && !stopping) hideLivePreview();
 }
 
 let numberFormat = new Intl.NumberFormat(i18n.localeTag);
@@ -330,10 +340,12 @@ function renderCalendar() {
     if (key === selectedDay) cell.classList.add("is-selected");
     if (day) {
       cell.classList.add("has-data", `level-${calendarLevel(day.audioBytes, maxBytes)}`);
+      if (day.minutes) cell.classList.add("has-minutes");
       const parts = [key];
       if (day.segments) parts.push(t("calendar.segmentSummary", { count: numberFormat.format(day.segments) }));
       if (day.audioFiles) parts.push(t("calendar.recordingSummary", { count: numberFormat.format(day.audioFiles) }));
       parts.push(formatBytes(day.audioBytes));
+      if (day.minutes) parts.push(t("calendar.minutesSummary"));
       cell.title = parts.join(" · ");
       cell.setAttribute("aria-label", parts.join(", "));
     } else {
@@ -357,10 +369,13 @@ function renderDayDetail() {
   elements.calendarDetailChars.textContent = numberFormat.format(day.chars || 0);
   elements.calendarDetailFiles.textContent = numberFormat.format(day.audioFiles || 0);
   elements.calendarDetailSize.textContent = formatBytes(day.audioBytes);
-  elements.calendarSummaryButton.disabled = summarizingDay || !day.segments || !paragraphCorrectionAvailable;
-  elements.calendarSummaryButton.textContent = t(summarizingDay ? "minutes.generating" : "minutes.generate");
+  elements.calendarOpenMinutesButton.hidden = !day.minutes;
+  elements.calendarOpenMinutesButton.disabled = loadingMinutes || summarizingDay;
+  elements.calendarSummaryButton.disabled = summarizingDay || loadingMinutes || !day.segments || !paragraphCorrectionAvailable;
+  elements.calendarSummaryButton.classList.toggle("is-regenerate", Boolean(day.minutes));
+  elements.calendarSummaryButton.textContent = t(summarizingDay ? "minutes.generating" : day.minutes ? "minutes.regenerate" : "minutes.generate");
   elements.calendarSummaryButton.title = paragraphCorrectionAvailable ? "" : t("minutes.unavailable");
-  elements.calendarDeleteButton.disabled = summarizingDay || (!day.segments && !day.audioFiles);
+  elements.calendarDeleteButton.disabled = summarizingDay || loadingMinutes || (!day.segments && !day.audioFiles);
 }
 
 function openDeleteDialog() {
@@ -402,15 +417,25 @@ function updateMinutesDownload(date, markdown) {
   elements.minutesDownload.download = `diting-${date}-minutes.md`;
 }
 
-async function generateDayMinutes() {
-  const date = selectedDay;
-  if (!date || summarizingDay || !paragraphCorrectionAvailable) return;
-  summarizingDay = true;
-  activeMinutesDate = date;
-  renderDayDetail();
+function renderMinutesGeneratedAt() {
+  elements.minutesGeneratedAt.hidden = !activeMinutesGeneratedAt;
+  if (!activeMinutesGeneratedAt) return;
+  const time = new Date(activeMinutesGeneratedAt).toLocaleString(i18n.localeTag, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  elements.minutesGeneratedAt.textContent = t("minutes.generatedAt", { time });
+}
 
+function openMinutesDialog(date, statusKey) {
+  activeMinutesDate = date;
+  activeMinutesGeneratedAt = "";
   elements.minutesDialogDate.textContent = formatDayLabel(date);
-  elements.minutesStatus.textContent = t("minutes.working");
+  renderMinutesGeneratedAt();
+  elements.minutesStatus.textContent = t(statusKey);
   elements.minutesStatus.hidden = false;
   elements.minutesError.hidden = true;
   elements.minutesContent.hidden = true;
@@ -419,22 +444,62 @@ async function generateDayMinutes() {
   elements.minutesSource.textContent = "";
   if (!elements.minutesDialog.open) elements.minutesDialog.showModal();
   elements.minutesCloseIcon.focus();
+}
+
+function showMinutesResult(result) {
+  elements.minutesPreview.innerHTML = renderMarkdown(result.markdown);
+  elements.minutesSource.textContent = result.markdown;
+  updateMinutesDownload(result.date, result.markdown);
+  activeMinutesGeneratedAt = result.generatedAt || "";
+  renderMinutesGeneratedAt();
+  elements.minutesStatus.hidden = true;
+  elements.minutesContent.hidden = false;
+  elements.minutesDownload.hidden = false;
+  elements.minutesDownload.focus();
+  const day = calendarDays.get(result.date);
+  if (day && !day.minutes) {
+    day.minutes = true;
+    renderCalendar();
+  }
+}
+
+async function generateDayMinutes() {
+  const date = selectedDay;
+  if (!date || summarizingDay || loadingMinutes || !paragraphCorrectionAvailable) return;
+  summarizingDay = true;
+  renderDayDetail();
+  openMinutesDialog(date, "minutes.working");
 
   try {
     const result = await api(`/api/days/${encodeURIComponent(date)}/minutes`, { method: "POST" });
-    elements.minutesPreview.innerHTML = renderMarkdown(result.markdown);
-    elements.minutesSource.textContent = result.markdown;
-    updateMinutesDownload(date, result.markdown);
-    elements.minutesStatus.hidden = true;
-    elements.minutesContent.hidden = false;
-    elements.minutesDownload.hidden = false;
-    elements.minutesDownload.focus();
+    showMinutesResult(result);
   } catch (error) {
     elements.minutesStatus.hidden = true;
     elements.minutesError.textContent = t("minutes.failed", { message: error.message });
     elements.minutesError.hidden = false;
   } finally {
     summarizingDay = false;
+    renderDayDetail();
+  }
+}
+
+async function openDayMinutes() {
+  const date = selectedDay;
+  if (!date || loadingMinutes || summarizingDay) return;
+  loadingMinutes = true;
+  renderDayDetail();
+  openMinutesDialog(date, "minutes.loading");
+
+  try {
+    const result = await api(`/api/days/${encodeURIComponent(date)}/minutes`);
+    showMinutesResult(result);
+  } catch (error) {
+    elements.minutesStatus.hidden = true;
+    elements.minutesError.textContent = t("minutes.loadFailed", { message: error.message });
+    elements.minutesError.hidden = false;
+    loadDays();
+  } finally {
+    loadingMinutes = false;
     renderDayDetail();
   }
 }
@@ -682,22 +747,29 @@ async function jumpToParagraph(id) {
 function renderTopics(paragraphs) {
   const groups = groupTopics(paragraphs, t("topics.uncategorized"));
   const fragment = document.createDocumentFragment();
-  for (const group of groups) {
+  for (const [index, group] of groups.entries()) {
     const groupItem = document.createElement("li");
     groupItem.className = "topic-group";
     const details = document.createElement("details");
     details.className = "topic-category";
-    details.dataset.category = group.category;
-    details.open = !collapsedTopicCategories.has(group.category);
+    details.dataset.category = group.key;
+    details.open = topicGroupOpen(group.key, index === groups.length - 1, collapsedTopicCategories, expandedTopicCategories);
     const category = document.createElement("summary");
     category.className = "topic-category-summary";
     const categoryName = document.createElement("span");
     categoryName.className = "topic-category-name";
     categoryName.textContent = group.category;
+    const period = document.createElement("span");
+    period.className = "topic-category-time";
+    if (group.startedAt) {
+      const start = paragraphTime(group.startedAt);
+      const end = paragraphTime(group.endedAt || group.startedAt);
+      period.textContent = start === end ? start : `${start}–${end}`;
+    }
     const count = document.createElement("span");
     count.className = "topic-category-count";
     count.textContent = t("topics.count", { count: group.topics.length });
-    category.append(categoryName, count);
+    category.append(categoryName, period, count);
 
     const children = document.createElement("ol");
     children.className = "topic-sublist";
@@ -1039,10 +1111,8 @@ function connectEvents() {
     if (event.data) updateStatus(JSON.parse(event.data));
   });
   eventSource.addEventListener("interim", (event) => {
-    const interim = JSON.parse(event.data);
-    elements.interimText.textContent = interim.text || t("live.finishing");
-    elements.liveTime.textContent = interim.startedAt ? formatTime(interim.startedAt) : "";
-    updateLivePreview(interim);
+    setSpeaking(true);
+    updateLivePreview(JSON.parse(event.data));
   });
   eventSource.addEventListener("paragraph", () => schedulePreviewRefresh());
   eventSource.addEventListener("archive", () => {
@@ -1052,8 +1122,7 @@ function connectEvents() {
     schedulePreviewRefresh();
   });
   eventSource.addEventListener("segment", () => {
-    elements.interimText.textContent = t("live.saved");
-    elements.liveTime.textContent = "";
+    setSpeaking(false);
     hideLivePreview();
     loadStatus();
     loadStats();
@@ -1077,7 +1146,7 @@ async function showCalendarSelection() {
 
 i18n.subscribe(() => {
   updateLocaleFormats();
-  updateStatus(currentStatus, currentStatus.state === "RUNNING");
+  updateStatus(currentStatus);
   updateStats(archiveStats);
   updateMarkdownDownload();
   updateASRPresentation(currentASR);
@@ -1086,7 +1155,9 @@ i18n.subscribe(() => {
   renderTopics(currentParagraphs);
   if (elements.minutesDialog.open) {
     elements.minutesDialogDate.textContent = activeMinutesDate ? formatDayLabel(activeMinutesDate) : "";
+    renderMinutesGeneratedAt();
     if (summarizingDay) elements.minutesStatus.textContent = t("minutes.working");
+    else if (loadingMinutes) elements.minutesStatus.textContent = t("minutes.loading");
   }
   elements.connectionText.textContent = t(elements.connection.classList.contains("is-connected") ? "connection.connected" : "connection.reconnecting");
   elements.splitParagraphsButton.textContent = t(splittingPreview ? "paragraph.splitting" : "preview.split");
@@ -1131,6 +1202,7 @@ elements.calendarGrid.addEventListener("click", (event) => {
   showCalendarSelection();
 });
 elements.calendarSummaryButton.addEventListener("click", generateDayMinutes);
+elements.calendarOpenMinutesButton.addEventListener("click", openDayMinutes);
 elements.calendarDeleteButton.addEventListener("click", openDeleteDialog);
 elements.minutesCloseIcon.addEventListener("click", () => elements.minutesDialog.close());
 elements.minutesCloseButton.addEventListener("click", () => elements.minutesDialog.close());
@@ -1157,16 +1229,20 @@ elements.markdownPreview.addEventListener("click", (event) => {
   const speaker = event.target.closest(".md-speaker");
   if (speaker && speaker.dataset.label) openSpeakerDialog(speaker.dataset.label);
 });
-elements.topicList.addEventListener("toggle", (event) => {
-  const details = event.target.closest(".topic-category");
-  if (!details) return;
-  if (details.open) {
-    collapsedTopicCategories.delete(details.dataset.category);
-  } else {
-    collapsedTopicCategories.add(details.dataset.category);
-  }
-}, true);
 elements.topicList.addEventListener("click", (event) => {
+  const summary = event.target.closest(".topic-category-summary");
+  if (summary) {
+    const details = summary.closest(".topic-category");
+    const key = details.dataset.category;
+    if (details.open) {
+      collapsedTopicCategories.add(key);
+      expandedTopicCategories.delete(key);
+    } else {
+      collapsedTopicCategories.delete(key);
+      expandedTopicCategories.add(key);
+    }
+    return;
+  }
   const link = event.target.closest(".topic-link");
   if (!link || !link.dataset.paragraphId) return;
   event.preventDefault();

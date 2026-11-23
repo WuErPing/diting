@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { groupTopics } = require("./topics.js");
+const { groupTopics, topicGroupOpen } = require("./topics.js");
 const { renderInline, renderMarkdown } = require("./markdown.js");
 
 test("topics form an ordered two-level tree and exclude low-value paragraphs", () => {
@@ -23,6 +23,34 @@ test("topics form an ordered two-level tree and exclude low-value paragraphs", (
     { category: "产品交付", ids: ["a", "b", "d"] },
     { category: "团队协作", ids: ["c"] },
   ]);
+});
+
+test("same-category topics stay in separate large time periods", () => {
+  const groups = groupTopics([
+    { id: "a", category: "薪酬绩效", startedAt: "2026-11-22T16:00:00+08:00", endedAt: "2026-11-22T16:02:00+08:00" },
+    { id: "b", category: "薪酬绩效", startedAt: "2026-11-22T16:08:00+08:00", endedAt: "2026-11-22T16:09:00+08:00" },
+    { id: "c", category: "薪酬绩效", startedAt: "2026-11-22T16:20:00+08:00", endedAt: "2026-11-22T16:21:00+08:00" },
+  ], "其他主题");
+
+  assert.deepEqual(groups.map((group) => ({
+    key: group.key,
+    ids: group.topics.map((topic) => topic.id),
+    startedAt: group.startedAt,
+    endedAt: group.endedAt,
+  })), [
+    { key: "0|薪酬绩效", ids: ["a", "b"], startedAt: "2026-11-22T16:00:00+08:00", endedAt: "2026-11-22T16:09:00+08:00" },
+    { key: "1|薪酬绩效", ids: ["c"], startedAt: "2026-11-22T16:20:00+08:00", endedAt: "2026-11-22T16:21:00+08:00" },
+  ]);
+});
+
+test("only the latest category opens automatically while manual choices win", () => {
+  const collapsed = new Set(["latest"]);
+  const expanded = new Set(["older"]);
+
+  assert.equal(topicGroupOpen("older", false, collapsed, expanded), true);
+  assert.equal(topicGroupOpen("latest", true, collapsed, expanded), false);
+  assert.equal(topicGroupOpen("other", false, collapsed, expanded), false);
+  assert.equal(topicGroupOpen("newest", true, collapsed, expanded), true);
 });
 
 test("legacy topics without a category use the localized fallback", () => {

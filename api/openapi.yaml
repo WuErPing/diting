@@ -47,7 +47,7 @@ paths:
                       $ref: '#/components/schemas/DayStat'
   /days/{date}/minutes:
     post:
-      summary: 生成指定日期的 Markdown 会议纪要
+      summary: 生成并保存指定日期的 Markdown 会议纪要
       parameters:
         - name: date
           in: path
@@ -57,7 +57,7 @@ paths:
             pattern: '^\d{4}-\d{2}-\d{2}$'
       responses:
         '200':
-          description: 日期、转写段数与 Markdown 会议纪要
+          description: 日期、转写段数、Markdown 会议纪要与生成时间；纪要持久化到 data/minutes，可随时通过 GET 重新打开
           content:
             application/json:
               schema:
@@ -68,6 +68,30 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+    get:
+      summary: 读取指定日期已保存的会议纪要
+      parameters:
+        - name: date
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+      responses:
+        '200':
+          description: 已保存的会议纪要，不调用模型
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DayMinutesResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: 当天还没有已生成的会议纪要（MINUTES_NOT_FOUND）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /days/{date}:
     delete:
       summary: 删除某天数据（支持 dry-run）
@@ -577,6 +601,9 @@ components:
           type: integer
         audioBytes:
           type: integer
+        minutes:
+          type: boolean
+          description: 当天是否已保存生成的会议纪要
     DayDeleteResponse:
       type: object
       properties:
@@ -607,6 +634,10 @@ components:
         markdown:
           type: string
           description: Markdown 格式的每日会议纪要
+        generatedAt:
+          type: string
+          format: date-time
+          description: 纪要生成时间
     SpeakerView:
       type: object
       properties:

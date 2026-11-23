@@ -117,6 +117,47 @@ func TestClientGroupSendsExpectedRequest(t *testing.T) {
 	}
 }
 
+func TestClientCanonicalizeCategories(t *testing.T) {
+	var raw []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(chatCompletion(`{"categories":[{"category":"薪酬绩效","sources":["薪酬激励","薪酬分配"]},{"category":"会议协调","sources":["会议安排"]}]}`, "stop")))
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{BaseURL: server.URL + "/v1", Model: "test-model"})
+	mapping, err := client.CanonicalizeCategories(context.Background(), []CategoryTopics{
+		{Category: "薪酬激励", Topics: []string{"调薪名单 讨论加薪范围。"}},
+		{Category: "薪酬分配", Topics: []string{"额度分配 确认调薪额度。"}},
+		{Category: "会议安排", Topics: []string{"日程协调 确定会议时间。"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mapping) != 3 || mapping["薪酬激励"] != "薪酬绩效" || mapping["薪酬分配"] != "薪酬绩效" || mapping["会议安排"] != "会议协调" {
+		t.Fatalf("mapping = %v", mapping)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	messages, _ := body["messages"].([]any)
+	user, _ := messages[1].(map[string]any)
+	prompt, _ := user["content"].(string)
+	for _, want := range []string{"薪酬激励", "调薪名单", "薪酬分配", "会议安排"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestParseCategoryMappingRejectsDuplicateSources(t *testing.T) {
+	_, err := parseCategoryMapping(`{"categories":[{"category":"薪酬绩效","sources":["薪酬激励"]},{"category":"人员管理","sources":["薪酬激励"]}]}`, []string{"薪酬激励"})
+	if err == nil {
+		t.Fatal("expected duplicate source error")
+	}
+}
+
 func TestParseGroupsVariants(t *testing.T) {
 	cases := []struct {
 		name string
@@ -137,7 +178,7 @@ func TestParseGroupsVariants(t *testing.T) {
 		{"invalid json", `{"paragraphs":`, 3, nil, false},
 		{"trailing gap", `{"paragraphs":[{"start":1,"end":2}]}`, 3, []Group{{Start: 1, End: 3}}, true},
 		{"gap between groups", `{"paragraphs":[{"start":1,"end":3},{"start":5,"end":6}]}`, 6, []Group{{Start: 1, End: 3}, {Start: 4, End: 6}}, true},
-		{"overlap", `{"paragraphs":[{"start":1,"end":2},{"start":2,"end":3}]}`, 3, nil, false},
+		{"overlap", `{"paragraphs":[{"start":1,"end":2},{"start":2,"end":3}]}`, 3, []Group{{Start: 1, End: 2}, {Start: 3, End: 3}}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -179,6 +220,25 @@ func TestClientGroupRepairsGap(t *testing.T) {
 	}
 }
 
+func TestClientGroupRetriesEmptyChoicesOnce(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			_, _ = w.Write([]byte(`{"choices":[]}`))
+			return
+		}
+		_, _ = w.Write([]byte(chatCompletion(`{"paragraphs":[{"start":1,"end":1,"category":"产品","title":"发布","summary":"确定发布。","valuable":true}]}`, "stop")))
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{BaseURL: server.URL, Model: "m"})
+	groups, err := client.Group(context.Background(), []string{"讨论发布"})
+	if err != nil || len(groups) != 1 || calls != 2 {
+		t.Fatalf("groups = %v, calls = %d, err = %v", groups, calls, err)
+	}
+}
+
 func TestClientGroupErrors(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -189,7 +249,7 @@ func TestClientGroupErrors(t *testing.T) {
 		{"http error", http.StatusInternalServerError, "", "stop"},
 		{"truncated", http.StatusOK, `{"paragraphs":[]}`, "length"},
 		{"no choices", http.StatusOK, "", "stop"},
-		{"invalid groups", http.StatusOK, `{"paragraphs":[{"start":2,"end":3},{"start":1,"end":1}]}`, "stop"},
+		{"invalid groups", http.StatusOK, `{"paragraphs":[{"start":1,"end":4}]}`, "stop"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

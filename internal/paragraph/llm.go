@@ -47,8 +47,9 @@ const (
 // truncation that discards corrections on long runs.
 const correctionChunkRunes = 500
 
-const systemPrompt = "你是会议议题分析助手。输入是带说话人标签的连续转写，说话人变化不代表议题变化。" +
-	"把围绕同一问题、目标或决策的连续发言归为同一会议议题，再用稳定的大主题归类，并生成简短的小主题名称和简明介绍。" +
+const systemPrompt = "你是会议议题分析助手。输入是同一大时间段内带说话人标签的连续转写，说话人变化不代表议题变化。" +
+	"先识别少量稳定的领域级大主题，再把围绕同一问题、目标或决策的连续发言归为同一会议议题，并生成简短的小主题名称和简明介绍。" +
+	"相同或相近含义必须复用完全相同的大主题名称，不要用近义词重复建立大主题。" +
 	"只有包含实质观点、问题、事实、方案、决策、分歧、任务或行动项的段落才标记 valuable=true；" +
 	"寒暄、闲聊、语气词、重复确认和无信息过渡标记 valuable=false，不要为了覆盖所有语句而制造主题。" +
 	"必须完整覆盖 1..N、连续且无重叠；不新增、删除或改写原文；只输出 JSON。"
@@ -202,7 +203,11 @@ func (c *Client) Group(ctx context.Context, texts []string) ([]Group, error) {
 	if len(texts) == 0 {
 		return nil, fmt.Errorf("没有可切分的语句")
 	}
-	content, err := c.complete(ctx, c.chatRequest(texts))
+	request := c.chatRequest(texts)
+	content, err := c.complete(ctx, request)
+	if errors.Is(err, errNoChoices) {
+		content, err = c.complete(ctx, request)
+	}
 	if errors.Is(err, errNoChoices) || errors.Is(err, errTruncated) {
 		return nil, invalidGrouping(err)
 	}
@@ -578,8 +583,8 @@ func BuildPrompt(texts []string) string {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, line)
 	}
 	fmt.Fprintf(&b, "\n按会议议题切分连续发言，完整覆盖 1..%d，不重叠。同一议题可以包含多人的问答、讨论、决策和行动项；不要按说话人切分。"+
-		"每段提供不超过 8 字的大主题 category、不超过 12 字的小主题 title、不超过 50 字且明确包含结论或待办的 summary，以及布尔值 valuable。"+
-		"相同领域复用同一个 category，title 要具体且不重复 category；summary 只写一两句，可用 **加粗** 或 `代码` 等行内 Markdown，不使用标题或列表。"+
+		"每段提供不超过 8 字的领域级大主题 category、不超过 12 字的小主题 title、不超过 50 字且明确包含结论或待办的 summary，以及布尔值 valuable。"+
+		"当前时间段内相同或相近领域必须复用完全相同的 category，不要用近义词建立多个大类；title 要具体且不重复 category；summary 只写一两句，可用 **加粗** 或 `代码` 等行内 Markdown，不使用标题或列表。"+
 		"有实质讨论价值时 valuable=true；寒暄、闲聊、语气词、重复确认和无信息过渡时 valuable=false，category、title 和 summary 留空。只输出 JSON。\n/no_think", len(texts))
 	return b.String()
 }

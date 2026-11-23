@@ -37,12 +37,20 @@ func TestBuildRunsKeepsMeetingAcrossSpeakerChanges(t *testing.T) {
 	}
 }
 
-func TestBuildRunsIgnoresLongPauses(t *testing.T) {
+func TestBuildRunsSplitsLongPauses(t *testing.T) {
 	first := testSegment("a", "说话人1", "一", testBase, testBase.Add(time.Second))
-	for _, gap := range []time.Duration{time.Minute, time.Hour, -2 * time.Second} {
+	for _, gap := range []time.Duration{time.Minute, 10*time.Minute - time.Second, -2 * time.Second} {
 		next := testSegment("b", "说话人1", "二", first.EndedAt.Add(gap), first.EndedAt.Add(gap+time.Second))
 		runs := BuildRuns([]store.Segment{first, next}, RunOptions{})
 		want := [][]string{{"a", "b"}}
+		if got := runIDs(runs); !reflect.DeepEqual(got, want) {
+			t.Fatalf("gap %s: runs = %v, want %v", gap, got, want)
+		}
+	}
+	for _, gap := range []time.Duration{10 * time.Minute, time.Hour} {
+		next := testSegment("b", "说话人1", "二", first.EndedAt.Add(gap), first.EndedAt.Add(gap+time.Second))
+		runs := BuildRuns([]store.Segment{first, next}, RunOptions{})
+		want := [][]string{{"a"}, {"b"}}
 		if got := runIDs(runs); !reflect.DeepEqual(got, want) {
 			t.Fatalf("gap %s: runs = %v, want %v", gap, got, want)
 		}
@@ -144,7 +152,9 @@ func TestNormalizeGroups(t *testing.T) {
 		{"trailing gap", []Group{{Start: 1, End: 2}}, 5, []Group{{Start: 1, End: 5}}, true, true},
 		{"empty groups", nil, 3, nil, false, false},
 		{"no sentences", []Group{{Start: 1, End: 1}}, 0, nil, false, false},
-		{"overlap", []Group{{Start: 1, End: 2}, {Start: 2, End: 3}}, 3, nil, false, false},
+		{"overlap", []Group{{Start: 1, End: 2}, {Start: 2, End: 3}}, 3, []Group{{Start: 1, End: 2}, {Start: 3, End: 3}}, true, true},
+		{"redundant overlap", []Group{{Start: 1, End: 3}, {Start: 2, End: 3}}, 3, []Group{{Start: 1, End: 3}}, true, true},
+		{"redundant reversed", []Group{{Start: 1, End: 10}, {Start: 11, End: 10}}, 10, []Group{{Start: 1, End: 10}}, true, true},
 		{"out of range", []Group{{Start: 1, End: 4}}, 3, nil, false, false},
 		{"reversed", []Group{{Start: 1, End: 0}}, 3, nil, false, false},
 	}

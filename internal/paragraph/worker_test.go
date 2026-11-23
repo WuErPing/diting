@@ -136,7 +136,7 @@ func TestWorkerMergesOnEverySegment(t *testing.T) {
 	}
 }
 
-func TestWorkerMergesLongPausesWithoutSegment(t *testing.T) {
+func TestWorkerSplitsLongPauses(t *testing.T) {
 	clock := newFakeClock(testBase)
 	paragraphStore := openTestStore(t)
 	grouper := &fakeGrouper{}
@@ -149,12 +149,11 @@ func TestWorkerMergesLongPausesWithoutSegment(t *testing.T) {
 
 	later := testBase.Add(time.Hour)
 	worker.Notify(testSegment("b", "说话人1", "二", later, later.Add(time.Second)))
-	waitFor(t, "merged across pause", func() bool {
+	waitFor(t, "split across pause", func() bool {
 		all := paragraphStore.All()
-		return len(all) == 1 && len(all[0].SegmentIDs) == 2
+		return len(all) == 2 && len(all[0].SegmentIDs) == 1 && len(all[1].SegmentIDs) == 1
 	})
 
-	// No timer should fire on its own: only the new segment triggers merging.
 	if grouper.count() != 2 {
 		t.Fatalf("model calls = %d", grouper.count())
 	}
@@ -337,14 +336,14 @@ func TestWorkerLogsModelForGrouping(t *testing.T) {
 		{name: "progress", llmCalls: 19, wantLog: "Paragraph merge progress: model=test-model calls=20"},
 		{
 			name: "failure", invalidGroups: true,
-			wantLog: "Paragraph splitting failed; falling back to concatenation: model=test-model segments=2 chars=4 elapsed=0s err=invalid model grouping: paragraph 2 starts at 2, overlapping the covered range",
+			wantLog: "Paragraph splitting failed; falling back to concatenation: model=test-model segments=2 chars=4 elapsed=0s err=invalid model grouping: paragraph 2 has invalid range 2-3",
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			grouper := &fakeGrouper{fn: func(_ int, _ context.Context, texts []string) ([]Group, error) {
 				if tc.invalidGroups {
-					return []Group{{Start: 1, End: 2}, {Start: 2, End: 2}}, nil
+					return []Group{{Start: 1, End: 2}, {Start: 2, End: 3}}, nil
 				}
 				return []Group{{Start: 1, End: len(texts)}}, nil
 			}}
@@ -624,6 +623,72 @@ func TestWorkerSplitRecentUnavailable(t *testing.T) {
 	worker := newTestWorker(t, newFakeClock(testBase), openTestStore(t), fakeSegments{}, nil)
 	if _, err := worker.SplitRecent(context.Background(), 500); !errors.Is(err, ErrSplitUnavailable) {
 		t.Fatalf("error = %v, want ErrSplitUnavailable", err)
+	}
+}
+
+type fakeCanonicalGrouper struct {
+	fakeGrouper
+	periods  [][]CategoryTopics
+	failures int
+}
+
+func (g *fakeCanonicalGrouper) CanonicalizeCategories(_ context.Context, categories []CategoryTopics) (map[string]string, error) {
+	g.periods = append(g.periods, categories)
+	if g.failures > 0 {
+		g.failures--
+		return nil, errors.New("temporary model failure")
+	}
+	mapping := make(map[string]string, len(categories))
+	for _, category := range categories {
+		mapping[category.Category] = "薪酬绩效"
+	}
+	return mapping, nil
+}
+
+func TestCanonicalizeCategoryPeriodRetriesOnce(t *testing.T) {
+	grouper := &fakeCanonicalGrouper{failures: 1}
+	paragraphs := []Paragraph{
+		{ID: "a", Text: "讨论调薪。", Category: "薪酬分配", Title: "调薪", SegmentIDs: []string{"a"}},
+		{ID: "b", Text: "确认激励。", Category: "薪酬激励", Title: "激励", SegmentIDs: []string{"b"}},
+	}
+	canonicalizeCategoryPeriod(context.Background(), paragraphs, grouper)
+	if len(grouper.periods) != 2 || paragraphs[0].Category != "薪酬绩效" || paragraphs[1].Category != "薪酬绩效" {
+		t.Fatalf("calls = %d, paragraphs = %+v", len(grouper.periods), paragraphs)
+	}
+}
+
+func TestRebuildCanonicalizesCategoriesWithinTimePeriod(t *testing.T) {
+	one := testSegment("a", "说话人1", "讨论调薪。", testBase, testBase.Add(time.Second))
+	two := testSegment("b", "说话人1", "确认激励额度。", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
+	later := testBase.Add(time.Hour)
+	three := testSegment("c", "说话人1", "复盘调薪结果。", later, later.Add(time.Second))
+	grouper := &fakeCanonicalGrouper{fakeGrouper: fakeGrouper{fn: func(_ int, _ context.Context, texts []string) ([]Group, error) {
+		category := "薪酬分配"
+		if strings.Contains(texts[0], "激励") {
+			category = "薪酬激励"
+		} else if strings.Contains(texts[0], "复盘") {
+			category = "薪酬复盘"
+		}
+		return []Group{{Start: 1, End: len(texts), Category: category, Title: "小主题", Summary: "保留简介。"}}, nil
+	}}}
+	paragraphStore := openTestStore(t)
+
+	stats, err := Rebuild(context.Background(), paragraphStore, []store.Segment{one, two, three}, grouper, nil,
+		"m", RunOptions{MaxSegments: 1}, newFakeClock(testBase), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Paragraphs != 3 || len(grouper.periods) != 1 {
+		t.Fatalf("stats = %+v, periods = %d", stats, len(grouper.periods))
+	}
+	all := paragraphStore.All()
+	for _, paragraph := range all[:2] {
+		if paragraph.Category != "薪酬绩效" || paragraph.Title != "小主题" || paragraph.Summary != "保留简介。" {
+			t.Fatalf("paragraph = %+v", paragraph)
+		}
+	}
+	if all[2].Category != "薪酬复盘" {
+		t.Fatalf("later period category = %q", all[2].Category)
 	}
 }
 

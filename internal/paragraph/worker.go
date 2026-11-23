@@ -48,6 +48,7 @@ type WorkerOptions struct {
 	Model        string
 	MaxSegments  int
 	MaxChars     int
+	MaxSilence   time.Duration
 	Clock        Clock
 	Logf         func(format string, args ...any)
 }
@@ -104,6 +105,7 @@ func NewWorker(opts WorkerOptions) *Worker {
 		runOpts: RunOptions{
 			MaxSegments: opts.MaxSegments,
 			MaxChars:    opts.MaxChars,
+			MaxSilence:  opts.MaxSilence,
 		},
 		model:        opts.Model,
 		correctionOn: opts.Corrector != nil,
@@ -361,7 +363,9 @@ func (w *Worker) accept(segment store.Segment) {
 
 func (w *Worker) continues(segment store.Segment) bool {
 	opts := w.runOpts.withDefaults()
-	return len(w.open)+1 <= opts.MaxSegments &&
+	last := w.open[len(w.open)-1]
+	return segment.StartedAt.Sub(last.EndedAt) < opts.MaxSilence &&
+		len(w.open)+1 <= opts.MaxSegments &&
 		w.openChars+textLength(segment.Text) <= opts.MaxChars
 }
 
@@ -829,6 +833,7 @@ func (w *Worker) SplitRecent(ctx context.Context, limit int) (RebuildStats, erro
 			stats.Fallback++
 		}
 	}
+	canonicalizeTimePeriods(ctx, paragraphs, w.opts.Grouper)
 	if err := w.opts.Store.SaveMany(paragraphs); err != nil {
 		return stats, fmt.Errorf("保存自动分段: %w", err)
 	}
@@ -871,6 +876,7 @@ func Rebuild(ctx context.Context, paragraphStore *Store, segments []store.Segmen
 			progress(i+1, len(runs))
 		}
 	}
+	canonicalizeTimePeriods(ctx, paragraphs, grouper)
 	if err := paragraphStore.Replace(paragraphs); err != nil {
 		return stats, err
 	}
@@ -903,6 +909,8 @@ func composeRun(ctx context.Context, run []store.Segment, grouper Grouper, corre
 		}
 		if err != nil {
 			observability.LLMFailures.Inc()
+			log.Printf("Paragraph splitting failed; falling back to concatenation: model=%s segments=%d chars=%d elapsed=%s err=%v",
+				model, len(run), runChars(run), clock.Now().Sub(start).Round(time.Millisecond), err)
 			if ctx.Err() != nil {
 				return nil, source, ctx.Err()
 			}
