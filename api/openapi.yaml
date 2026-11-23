@@ -131,6 +131,28 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/SpeakerView'
+  /speakers/samples:
+    get:
+      summary: 每个稳定声纹标签的最近样板句子
+      description: 按说话人注册表顺序返回标签；样板取该标签最近一条具有非空转写的录音，没有可用样板时省略 sample。
+      responses:
+        '200':
+          description: 声纹标签与可播放录音对应的样板句子
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SpeakerSample'
+        '500':
+          description: 无法读取声纹样板
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /speakers/{label}:
     patch:
       summary: 设置说话人别名
@@ -652,6 +674,17 @@ components:
         updatedAt:
           type: string
           format: date-time
+    SpeakerSample:
+      type: object
+      properties:
+        label:
+          type: string
+          description: 稳定的声纹标签
+        sample:
+          allOf:
+            - $ref: '#/components/schemas/SegmentView'
+          nullable: true
+          description: 最近一条具有非空转写的录音；没有可用样板时省略
     Lexicon:
       type: object
       properties:

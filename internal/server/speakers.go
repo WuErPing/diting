@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"diting/internal/speaker"
 )
@@ -19,6 +20,50 @@ func (s *Server) handleSpeakers(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		Data []speaker.View `json:"data"`
 	}{Data: views})
+}
+
+type speakerSampleView struct {
+	Label  string       `json:"label"`
+	Sample *segmentView `json:"sample,omitempty"`
+}
+
+func (s *Server) handleSpeakerSamples(w http.ResponseWriter, _ *http.Request) {
+	views := []speaker.View{}
+	if s.speakers != nil {
+		if stored := s.speakers.Speakers(); stored != nil {
+			views = stored
+		}
+	}
+	data := make([]speakerSampleView, len(views))
+	wanted := make(map[string]struct{}, len(views))
+	for i, view := range views {
+		data[i].Label = view.Label
+		wanted[view.Label] = struct{}{}
+	}
+	if len(views) > 0 && s.store != nil {
+		segments, err := s.store.All()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "SPEAKER_SAMPLES_FAILED", "无法读取声纹样板")
+			return
+		}
+		samples := make(map[string]*segmentView, len(views))
+		for i := len(segments) - 1; i >= 0 && len(samples) < len(views); i-- {
+			segment := segments[i]
+			if _, ok := wanted[segment.Speaker]; !ok || strings.TrimSpace(segment.Text) == "" {
+				continue
+			}
+			if _, exists := samples[segment.Speaker]; exists {
+				continue
+			}
+			samples[segment.Speaker] = &segmentView{Segment: segment, SpeakerName: s.speakerName(segment.Speaker)}
+		}
+		for i := range data {
+			data[i].Sample = samples[data[i].Label]
+		}
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Data []speakerSampleView `json:"data"`
+	}{Data: data})
 }
 
 func (s *Server) handleSpeakerAlias(w http.ResponseWriter, r *http.Request) {

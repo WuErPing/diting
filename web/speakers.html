@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title data-i18n="page.speakersTitle">Voiceprints · Diting</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/i18n.js" defer></script>
+  <script src="/voiceprints.js" defer></script>
+  <script src="/speakers.js" defer></script>
+</head>
+<body>
+  <div class="app-shell speakers-shell">
+    <header class="masthead">
+      <div class="identity">
+        <img class="seal" src="/logo.svg" alt="" width="52" height="52">
+        <div>
+          <p class="eyebrow">VOICEPRINT DIRECTORY</p>
+          <h1 data-i18n="brand.name">Diting</h1>
+          <p class="tagline" data-i18n="tagline.speakers">A name for every voice, with the original sound.</p>
+        </div>
+      </div>
+      <div class="masthead-actions">
+        <label class="language-control">
+          <span data-i18n="language.label">Language</span>
+          <select data-language-select data-i18n-aria-label="language.label" aria-label="Language">
+            <option value="en">English</option>
+            <option value="zh">中文</option>
+          </select>
+        </label>
+      </div>
+    </header>
+
+    <main class="records-main speakers-main" aria-labelledby="speakersPageTitle">
+      <div class="records-header">
+        <div>
+          <p class="eyebrow">VOICEPRINT TO SPEAKER</p>
+          <h2 id="speakersPageTitle" data-i18n="voiceprints.title">Voiceprint speakers</h2>
+          <p class="records-intro" data-i18n="voiceprints.intro">Listen to a sample, name each voiceprint, and merge duplicate labels that belong to the same person.</p>
+        </div>
+        <div class="records-actions">
+          <a class="text-button" href="/" data-i18n="records.back">Back home</a>
+          <button class="text-button" id="refreshVoiceprintsButton" type="button" data-i18n="voiceprints.refresh">Refresh voiceprints</button>
+        </div>
+      </div>
+      <p class="error-message" id="voiceprintsError" role="alert" hidden></p>
+      <p class="settings-success speakers-saved" id="voiceprintsSaved" role="status" data-i18n="voiceprints.saved" hidden>Speaker settings saved</p>
+      <div class="empty-state" id="voiceprintsEmpty" hidden>
+        <p data-i18n="voiceprints.emptyTitle">No voiceprints yet</p>
+        <span data-i18n="voiceprints.emptyHint">Start listening on the home page. Speaker labels will appear here after voices are identified.</span>
+      </div>
+      <div class="voiceprint-list" id="voiceprintList" aria-busy="true"></div>
+    </main>
+
+    <footer>
+      <span data-i18n="footer.voiceprints">Voiceprint labels · Sample audio · Local persistence</span>
+      <span data-i18n="footer.storage">Audio and text are stored in data under the working directory</span>
+    </footer>
+  </div>
+
+  <template id="voiceprintTemplate">
+    <article class="voiceprint-item">
+      <header class="voiceprint-header">
+        <span class="voiceprint-number" aria-hidden="true"></span>
+        <div class="voiceprint-identity">
+          <h3 class="voiceprint-name"></h3>
+          <p class="voiceprint-label"></p>
+        </div>
+        <span class="voiceprint-merged" hidden></span>
+      </header>
+      <div class="voiceprint-body">
+        <section class="voiceprint-sample">
+          <p class="eyebrow voiceprint-sample-label"></p>
+          <p class="voiceprint-sample-text"></p>
+          <p class="voiceprint-sample-meta"><time></time><span class="voiceprint-sample-duration"></span></p>
+          <audio controls preload="none"></audio>
+        </section>
+        <form class="voiceprint-form">
+          <fieldset class="voiceprint-fields">
+            <label class="field">
+              <span class="voiceprint-alias-label"></span>
+              <input class="voiceprint-alias" type="text" maxlength="32" autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="voiceprint-merge-label"></span>
+              <select class="voiceprint-merge"></select>
+            </label>
+            <p class="dialog-hint voiceprint-form-hint"></p>
+            <p class="dialog-error voiceprint-form-error" role="alert" hidden></p>
+            <div class="voiceprint-form-actions">
+              <button class="primary-button dialog-submit" type="submit" data-i18n="action.save">Save</button>
+            </div>
+          </fieldset>
+        </form>
+      </div>
+    </article>
+  </template>
+</body>
+</html>

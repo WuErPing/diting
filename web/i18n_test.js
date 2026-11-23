@@ -106,12 +106,23 @@ test("batch record selection and deletion are localized", () => {
   assert.equal(i18n.t("records.deleteSelectedTitle", { count: 3 }), "删除这 3 条记录？");
 });
 
+test("voiceprint configuration explains samples and speaker changes in both locales", () => {
+  const i18n = createI18n({ storage: null, languages: ["en-US"] });
+  assert.equal(i18n.t("voiceprints.title"), "Voiceprint speakers");
+  assert.equal(i18n.t("voiceprints.sample"), "Sample sentence");
+  assert.equal(i18n.t("voiceprints.saved"), "Speaker settings saved");
+  i18n.setLocale("zh");
+  assert.equal(i18n.t("voiceprints.title"), "声纹与说话人");
+  assert.equal(i18n.t("voiceprints.sample"), "样板句子");
+  assert.equal(i18n.t("voiceprints.saved"), "说话人设置已保存");
+});
+
 test("both locales define exactly the same translation keys", () => {
   assert.deepEqual(Object.keys(messages.zh).sort(), Object.keys(messages.en).sort());
 });
 
 test("every static and dynamic translation reference is defined", () => {
-  const files = ["index.html", "records.html", "settings.html", "app.js", "records.js", "settings.js"];
+  const files = ["index.html", "records.html", "settings.html", "speakers.html", "app.js", "records.js", "settings.js", "speakers.js"];
   const references = new Set();
   for (const file of files) {
     const source = fs.readFileSync(path.join(__dirname, file), "utf8");
