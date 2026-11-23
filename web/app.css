@@ -89,13 +89,7 @@ button:focus-visible, a:focus-visible, audio:focus-visible {
 .seal {
   width: 52px;
   height: 52px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--signal);
-  border-radius: 50%;
-  color: var(--signal);
-  font-family: var(--display);
-  font-size: 26px;
+  flex: none;
 }
 .eyebrow {
   margin: 0 0 4px;
@@ -750,7 +744,7 @@ footer {
   .voice-state-bars > span { width: 2px; }
   .voice-state-label { display: none; }
   .identity .eyebrow { font-size: 9px; }
-  .seal { width: 44px; height: 44px; font-size: 22px; }
+  .seal { width: 44px; height: 44px; }
   h1 { font-size: 34px; }
   .tagline { display: none; }
   .connection { font-size: 10px; }
