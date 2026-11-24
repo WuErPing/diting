@@ -35,8 +35,8 @@ jobs:
       - name: Run tests
         run: go test -race -coverprofile=coverage.out ./...
 
-      - name: Test web internationalization
-        run: node --test web/i18n_test.js
+      - name: Test web
+        run: node --test web/*_test.js
 
       - name: Check coverage threshold
         run: |

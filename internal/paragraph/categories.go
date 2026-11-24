@@ -18,9 +18,11 @@ type categoryCanonicalizer interface {
 	CanonicalizeCategories(ctx context.Context, categories []CategoryTopics) (map[string]string, error)
 }
 
-const categorySystemPrompt = "你是会议主题归类助手。输入是同一大时间段内已有的大主题及其小主题。" +
-	"把含义相同或从属同一领域的大主题归并为少量稳定的领域级大类，内容确实不同的类别保持独立。" +
-	"优先复用简洁清晰的已有名称，新名称不超过 8 字。每个输入类别必须恰好归入一个输出大类，只输出 JSON。"
+const categorySystemPrompt = "你是会议主题归类助手。输入是同一大时间段内已有的大主题，以及按时间顺序排列的小主题、摘要和原文摘录。" +
+	"每个大时间段只保留一个大主题，具体差异由小主题承载。时间段内的全部输入类别必须归并到这一个大类，不得再按领域、事件、人物、资产或短暂插话拆分。" +
+	"先结合时间顺序和上下文还原完整讨论，输出一个能概括该时段核心讨论且不超过 8 字的名称，不要只选用只能覆盖部分内容的领域词。" +
+	"例如，英伟达 CEO 回归及其股价、期权、公司管理、半导体和加密资产行情都在同一时间段时，统一为“黄仁勋回归”，不要保留“金融投资”“金融市场”“公司治理”“加密货币行情”等多个大类。" +
+	"每个输入类别的名称必须恰好出现在该唯一大类的 sources 中一次，输出的 categories 数组只能有一个类别，只输出 JSON。"
 
 func (c *Client) CanonicalizeCategories(ctx context.Context, categories []CategoryTopics) (map[string]string, error) {
 	if len(categories) == 0 {
@@ -37,9 +39,9 @@ func (c *Client) CanonicalizeCategories(ctx context.Context, categories []Catego
 			{Role: "user", Content: string(input)},
 		},
 		Temperature:     0,
-		MaxTokens:       2048,
+		MaxTokens:       4096,
 		Stream:          false,
-		ReasoningEffort: "none",
+		ReasoningEffort: "low",
 		ResponseFormat: &responseFormat{
 			Type: "json_schema",
 			JSONSchema: jsonSchema{
@@ -71,8 +73,8 @@ func (c *Client) CanonicalizeCategories(ctx context.Context, categories []Catego
 			},
 		},
 	}
-	c.applyMiMoParams(&request, "disabled")
-	content, err := c.complete(ctx, request)
+	c.applyMiMoParams(&request, "enabled")
+	content, err := c.completeWithClient(ctx, request, c.categoryHTTP)
 	if errors.Is(err, errNoChoices) || errors.Is(err, errTruncated) {
 		return nil, invalidGrouping(err)
 	}
@@ -104,12 +106,15 @@ func parseCategoryMapping(raw string, expected []string) (map[string]string, err
 	for _, category := range expected {
 		remaining[category] = struct{}{}
 	}
+	if len(payload.Categories) == 0 {
+		return nil, fmt.Errorf("归并结果没有大主题")
+	}
+	category := truncateTopicText(compactTopicText(payload.Categories[0].Category), 8)
+	if category == "" {
+		return nil, fmt.Errorf("归并后的大主题为空")
+	}
 	mapping := make(map[string]string, len(expected))
 	for _, group := range payload.Categories {
-		category := truncateTopicText(compactTopicText(group.Category), 8)
-		if category == "" {
-			return nil, fmt.Errorf("归并后的大主题为空")
-		}
 		for _, source := range group.Sources {
 			if _, ok := remaining[source]; !ok {
 				return nil, fmt.Errorf("类别 %q 重复或不在输入中", source)
@@ -156,7 +161,10 @@ func canonicalizeCategoryPeriod(ctx context.Context, paragraphs []Paragraph, can
 		if _, ok := byCategory[category]; !ok {
 			order = append(order, category)
 		}
-		byCategory[category] = append(byCategory[category], strings.TrimSpace(paragraph.TopicTitle()+" "+paragraph.TopicSummary()))
+		topic := strings.TrimSpace(paragraph.TopicTitle() + " " + paragraph.TopicSummary())
+		excerpt := truncateTopicText(strings.Join(strings.Fields(paragraph.Text), " "), 160)
+		context := fmt.Sprintf("%s %s 原文：%s", paragraph.StartedAt.Local().Format("15:04:05"), topic, excerpt)
+		byCategory[category] = append(byCategory[category], context)
 	}
 	if len(order) < 2 {
 		return
@@ -174,8 +182,11 @@ func canonicalizeCategoryPeriod(ctx context.Context, paragraphs []Paragraph, can
 		}
 	}
 	if err != nil {
-		log.Printf("Topic category consolidation failed; keeping original categories: categories=%d err=%v", len(input), err)
-		return
+		log.Printf("Topic category consolidation failed; using first category for the time period: categories=%d err=%v", len(input), err)
+		mapping = make(map[string]string, len(order))
+		for _, category := range order {
+			mapping[category] = order[0]
+		}
 	}
 	for i := range paragraphs {
 		if category, ok := mapping[paragraphs[i].Category]; ok {

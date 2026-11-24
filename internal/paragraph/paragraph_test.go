@@ -39,7 +39,7 @@ func TestBuildRunsKeepsMeetingAcrossSpeakerChanges(t *testing.T) {
 
 func TestBuildRunsSplitsLongPauses(t *testing.T) {
 	first := testSegment("a", "说话人1", "一", testBase, testBase.Add(time.Second))
-	for _, gap := range []time.Duration{time.Minute, 10*time.Minute - time.Second, -2 * time.Second} {
+	for _, gap := range []time.Duration{time.Minute, 15*time.Minute - time.Second, -2 * time.Second} {
 		next := testSegment("b", "说话人1", "二", first.EndedAt.Add(gap), first.EndedAt.Add(gap+time.Second))
 		runs := BuildRuns([]store.Segment{first, next}, RunOptions{})
 		want := [][]string{{"a", "b"}}
@@ -47,7 +47,7 @@ func TestBuildRunsSplitsLongPauses(t *testing.T) {
 			t.Fatalf("gap %s: runs = %v, want %v", gap, got, want)
 		}
 	}
-	for _, gap := range []time.Duration{10 * time.Minute, time.Hour} {
+	for _, gap := range []time.Duration{15 * time.Minute, time.Hour} {
 		next := testSegment("b", "说话人1", "二", first.EndedAt.Add(gap), first.EndedAt.Add(gap+time.Second))
 		runs := BuildRuns([]store.Segment{first, next}, RunOptions{})
 		want := [][]string{{"a"}, {"b"}}
@@ -232,22 +232,52 @@ func TestComposeParagraphsConstrainsTopicMetadata(t *testing.T) {
 	}
 }
 
-func TestComposeParagraphsBuildsMultiSpeakerTopic(t *testing.T) {
+func TestComposeParagraphsSplitsAtSpeakerChanges(t *testing.T) {
 	a := testSegment("a", "说话人1", "预算控制在十万。", testBase, testBase.Add(time.Second))
 	b := testSegment("b", "说话人2", "同意，周五前完成审批。", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
+	c := testSegment("c", "说话人2", "我会跟进。", testBase.Add(4*time.Second), testBase.Add(5*time.Second))
 
-	paragraphs := ComposeParagraphs([]store.Segment{a, b}, []Group{{
-		Start: 1, End: 2, Title: "预算与审批", Summary: "确定预算上限和审批时限。",
+	paragraphs := ComposeParagraphs([]store.Segment{a, b, c}, []Group{{
+		Start: 1, End: 3, Title: "预算与审批", Summary: "确定预算上限和审批时限。",
 	}}, SourceLLM, "model-x", testBase, nil)
-	if len(paragraphs) != 1 {
+	if len(paragraphs) != 2 {
 		t.Fatalf("paragraphs = %d", len(paragraphs))
 	}
-	topic := paragraphs[0]
-	if topic.Speaker != "" || topic.Text != "预算控制在十万。同意，周五前完成审批。" {
-		t.Fatalf("topic = %+v", topic)
+	first := paragraphs[0]
+	if first.Speaker != "说话人1" || first.Text != "预算控制在十万。" || !reflect.DeepEqual(first.SegmentIDs, []string{"a"}) {
+		t.Fatalf("first = %+v", first)
 	}
-	if topic.Title != "预算与审批" || !topic.HasTopic() {
-		t.Fatalf("topic metadata = %+v", topic)
+	second := paragraphs[1]
+	if second.Speaker != "说话人2" || second.Text != "同意，周五前完成审批。我会跟进。" || !reflect.DeepEqual(second.SegmentIDs, []string{"b", "c"}) {
+		t.Fatalf("second = %+v", second)
+	}
+	for _, topic := range paragraphs {
+		if topic.Title != "预算与审批" || !topic.HasTopic() {
+			t.Fatalf("topic metadata = %+v", topic)
+		}
+	}
+}
+
+func TestComposeParagraphsMergesLabelsResolvedToSameSpeaker(t *testing.T) {
+	a := testSegment("a", "说话人2", "先定周五下午。", testBase, testBase.Add(time.Second))
+	b := testSegment("b", "说话人9", "有变化再调整。", testBase.Add(2*time.Second), testBase.Add(3*time.Second))
+	c := testSegment("c", "说话人5", "可以。", testBase.Add(4*time.Second), testBase.Add(5*time.Second))
+	resolve := func(label string) string {
+		if label == "说话人5" {
+			return "王鹏"
+		}
+		return "Andy"
+	}
+
+	paragraphs := ComposeParagraphs([]store.Segment{a, b, c}, FallbackGroups(3), SourceLLM, "model-x", testBase, resolve)
+	if len(paragraphs) != 2 {
+		t.Fatalf("paragraphs = %d", len(paragraphs))
+	}
+	if paragraphs[0].Speaker != "Andy" || !reflect.DeepEqual(paragraphs[0].SegmentIDs, []string{"a", "b"}) {
+		t.Fatalf("first = %+v", paragraphs[0])
+	}
+	if paragraphs[1].Speaker != "王鹏" || !reflect.DeepEqual(paragraphs[1].SegmentIDs, []string{"c"}) {
+		t.Fatalf("second = %+v", paragraphs[1])
 	}
 }
 

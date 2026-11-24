@@ -74,6 +74,23 @@ test("daily meeting minutes have localized actions and errors", () => {
   assert.equal(i18n.apiError({ code: "DAY_SUMMARY_FAILED" }), "会议纪要生成失败，请检查模型设置和网络");
 });
 
+test("daily topic classification replaces the legacy split action", () => {
+  const index = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+  const app = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
+  assert.match(index, /id="calendarTopicsButton"/);
+  assert.doesNotMatch(index, /id="splitParagraphsButton"/);
+  assert.doesNotMatch(app, /splitParagraphsButton|splittingPreview/);
+
+  const i18n = createI18n({ storage: null, languages: ["en-US"] });
+  assert.equal(i18n.t("topics.classify"), "Classify topics");
+  assert.equal(i18n.t("topics.classifying"), "Classifying topics…");
+  assert.equal(i18n.apiError({ code: "DAY_TOPICS_FAILED" }), "Topic classification failed. Check the model settings and network");
+  i18n.setLocale("zh");
+  assert.equal(i18n.t("topics.classify"), "主题分类");
+  assert.equal(i18n.t("topics.classifying"), "正在主题分类…");
+  assert.equal(i18n.apiError({ code: "DAY_TOPICS_FAILED" }), "主题分类失败，请检查模型设置和网络");
+});
+
 test("unified configuration page has localized content and save feedback", () => {
   const i18n = createI18n({ storage: null, languages: ["en-US"] });
   assert.equal(i18n.t("action.config"), "Configuration");

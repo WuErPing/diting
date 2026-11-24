@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"diting/internal/paragraph"
@@ -172,6 +174,24 @@ func TestHandleGetDayMinutesValidationAndMissing(t *testing.T) {
 	}
 }
 
+func TestHandleGetDayMinutesRejectsCorruptData(t *testing.T) {
+	server, segmentStore := newTestServerWithSegments(t)
+	if _, err := segmentStore.SaveMinutes("2026-11-07", 1, "# 纪要"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(segmentStore.Root(), "minutes", "2026-11-07.json")
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/days/2026-11-07/minutes", nil)
+	request.SetPathValue("date", "2026-11-07")
+	recorder := httptest.NewRecorder()
+	server.handleGetDayMinutes(recorder, request)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("corrupt data status = %d, body = %s", recorder.Code, recorder.Body)
+	}
+}
+
 func TestHandleDaysIncludesMinutesFlag(t *testing.T) {
 	server, segmentStore := newTestServerWithSegments(t)
 	if _, err := segmentStore.SaveMinutes("2026-11-07", 1, "# 2026-11-07 会议纪要\n"); err != nil {
@@ -222,8 +242,8 @@ func TestHandleDeleteDayRemovesMinutes(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("delete status = %d, body = %s", recorder.Code, recorder.Body)
 	}
-	if _, err := segmentStore.DayMinutes("2026-11-07"); err == nil {
-		t.Fatal("minutes survived day deletion")
+	if _, err := segmentStore.DayMinutes("2026-11-07"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted minutes error = %v", err)
 	}
 
 	dryRun := httptest.NewRequest(http.MethodDelete, "/api/days/2026-11-06?dryRun=1", nil)

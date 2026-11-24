@@ -108,6 +108,13 @@ func TestClientGroupSendsExpectedRequest(t *testing.T) {
 	if len(messages) != 2 {
 		t.Fatalf("messages = %d", len(messages))
 	}
+	system, _ := messages[0].(map[string]any)
+	systemContent, _ := system["content"].(string)
+	for _, want := range []string{"完整讨论", "同一事件", "不同侧面", "短暂插话", "回到先前", "独立实质内容", "插话本身"} {
+		if !strings.Contains(systemContent, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, systemContent)
+		}
+	}
 	user, _ := messages[1].(map[string]any)
 	prompt, _ := user["content"].(string)
 	for _, want := range []string{"共 2 句", "1. 你好", "2. （无文字）", "1..2", "会议议题", "决策", "行动项", "寒暄", "category", "行内 Markdown", "valuable", "/no_think"} {
@@ -134,20 +141,47 @@ func TestClientCanonicalizeCategories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(mapping) != 3 || mapping["薪酬激励"] != "薪酬绩效" || mapping["薪酬分配"] != "薪酬绩效" || mapping["会议安排"] != "会议协调" {
+	if len(mapping) != 3 || mapping["薪酬激励"] != "薪酬绩效" || mapping["薪酬分配"] != "薪酬绩效" || mapping["会议安排"] != "薪酬绩效" {
 		t.Fatalf("mapping = %v", mapping)
 	}
 	var body map[string]any
 	if err := json.Unmarshal(raw, &body); err != nil {
 		t.Fatal(err)
 	}
+	if body["reasoning_effort"] != "low" || body["max_tokens"] != float64(4096) {
+		t.Fatalf("category reasoning = %v / %v", body["reasoning_effort"], body["max_tokens"])
+	}
 	messages, _ := body["messages"].([]any)
+	system, _ := messages[0].(map[string]any)
+	systemContent, _ := system["content"].(string)
+	for _, want := range []string{"每个大时间段只保留一个大主题", "具体差异由小主题承载", "时间顺序", "原文摘录", "黄仁勋回归", "只能有一个类别"} {
+		if !strings.Contains(systemContent, want) {
+			t.Fatalf("category system prompt missing %q: %s", want, systemContent)
+		}
+	}
 	user, _ := messages[1].(map[string]any)
 	prompt, _ := user["content"].(string)
 	for _, want := range []string{"薪酬激励", "调薪名单", "薪酬分配", "会议安排"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}
+	}
+}
+
+func TestClientCanonicalizeCategoriesAllowsLargerTimeWindows(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		_, _ = w.Write([]byte(chatCompletion(`{"categories":[{"category":"薪酬绩效","sources":["薪酬激励"]}]}`, "stop")))
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{BaseURL: server.URL + "/v1", Model: "test-model", Timeout: 10 * time.Millisecond})
+	mapping, err := client.CanonicalizeCategories(context.Background(), []CategoryTopics{{Category: "薪酬激励"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mapping["薪酬激励"] != "薪酬绩效" {
+		t.Fatalf("mapping = %v", mapping)
 	}
 }
 

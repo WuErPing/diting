@@ -17,7 +17,7 @@
 - **本地语音记录**：Silero VAD 检测人声，按天保存压缩录音和 JSONL 转写，重启后恢复历史。
 - **流式与精校识别**：实时显示临时文本，语句结束后使用本地 SenseVoice 精校；可选 MiMo ASR，云端失败时回退本地。
 - **说话人管理**：基于 CAM++ 声纹标注说话人，支持人名别名、多人标签合并和声纹模型评估。
-- **文稿与议题**：跨说话人生成议题段落、层级主题、语义修正和段落摘要，支持按天生成会议纪要。
+- **文稿与议题**：按说话人生成议题段落、层级主题、语义修正和段落摘要，支持按天生成会议纪要。
 - **Web 控制台**：实时预览、录音回放与下载、按天归档、单条或批量删除、Markdown 导出，支持中英文。
 - **个性化识别**：维护场景术语表，可全量重转写历史录音或仅重建派生段落。
 - **隐私优先**：默认识别和存储均在本机；只有明确启用 MiMo ASR 才上传音频，文本仅发送给已配置的议题模型。
@@ -73,7 +73,7 @@ Diting is a local voice recording console for macOS. A single Go process handles
 - **Local voice recording**: Silero VAD detects speech and saves compressed audio and JSONL transcripts by day, with history restored after restart.
 - **Streaming and refined recognition**: Interim text appears in real time, followed by local SenseVoice refinement. Optional MiMo ASR automatically falls back to local recognition if the cloud service fails.
 - **Speaker management**: CAM++ voiceprints provide speaker labels, name aliases, speaker merging, and voiceprint model evaluation.
-- **Transcripts and topics**: Generate semantic paragraphs across speakers, hierarchical topics, semantic corrections, paragraph summaries, and daily meeting minutes.
+- **Transcripts and topics**: Generate single-speaker semantic paragraphs, hierarchical topics, semantic corrections, paragraph summaries, and daily meeting minutes.
 - **Web console**: Live preview, audio playback and download, daily archives, single or batch deletion, Markdown export, and Chinese/English interfaces.
 - **Custom vocabulary**: Maintain domain-specific term mappings, retranscribe all historical recordings, or rebuild only derived paragraphs.
 - **Privacy first**: Recognition and storage stay local by default. Audio is uploaded only when MiMo ASR is explicitly enabled, and transcript text is sent only to the configured topic model.

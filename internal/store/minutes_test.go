@@ -112,8 +112,46 @@ func TestMinutesDatesIgnoreForeignFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".minutes-tmp.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "2026-02-30.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "2026-11-08.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	dates, err := s.MinutesDates()
 	if err != nil || len(dates) != 1 || dates[0] != "2026-11-07" {
 		t.Fatalf("dates = %v, err = %v", dates, err)
+	}
+}
+
+func TestDayMinutesRejectsCorruptJSON(t *testing.T) {
+	s := openMinutesStore(t)
+	if _, err := s.SaveMinutes("2026-11-07", 1, "# 纪要"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(s.Root(), minutesDir, "2026-11-07.json")
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DayMinutes("2026-11-07"); err == nil {
+		t.Fatal("corrupt minutes JSON accepted")
+	}
+}
+
+func TestSaveMinutesRenameFailureRemovesTempFile(t *testing.T) {
+	s := openMinutesStore(t)
+	dir := filepath.Join(s.Root(), minutesDir)
+	if err := os.MkdirAll(filepath.Join(dir, "2026-11-07.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveMinutes("2026-11-07", 1, "# 纪要"); err == nil {
+		t.Fatal("expected rename failure")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "2026-11-07.json" {
+		t.Fatalf("temporary files left after rename failure: %v", entries)
 	}
 }

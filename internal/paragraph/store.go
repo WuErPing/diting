@@ -89,6 +89,35 @@ func (s *Store) SaveMany(paragraphs []Paragraph) error {
 	return nil
 }
 
+func (s *Store) ReplaceDay(date string, paragraphs []Paragraph) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existingByID := make(map[string]Paragraph, len(s.list))
+	for _, existing := range s.list {
+		existingByID[existing.ID] = existing
+	}
+	for i, paragraph := range paragraphs {
+		if existing, ok := existingByID[paragraph.ID]; ok && paragraph.Digest == "" && existing.Text == paragraph.Text {
+			paragraphs[i].Digest = existing.Digest
+		}
+	}
+
+	next := make([]Paragraph, 0, len(s.list)+len(paragraphs))
+	for _, existing := range s.list {
+		if existing.StartedAt.Local().Format("2006-01-02") != date {
+			next = append(next, existing)
+		}
+	}
+	next = append(next, paragraphs...)
+	next = normalize(next)
+	if err := s.rewriteLocked(next); err != nil {
+		return err
+	}
+	s.list = next
+	return nil
+}
+
 func (s *Store) Replace(paragraphs []Paragraph) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

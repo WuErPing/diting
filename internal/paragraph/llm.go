@@ -36,9 +36,10 @@ var (
 )
 
 const (
-	maxResponseBytes  = 1 << 20
-	requestTimeout    = 90 * time.Second
-	modelCheckTimeout = 15 * time.Second
+	maxResponseBytes       = 1 << 20
+	requestTimeout         = 5 * time.Minute
+	categoryRequestTimeout = 5 * time.Minute
+	modelCheckTimeout      = 15 * time.Second
 )
 
 // correctionChunkRunes bounds the text sent per correction request. Thinking
@@ -47,9 +48,11 @@ const (
 // truncation that discards corrections on long runs.
 const correctionChunkRunes = 500
 
-const systemPrompt = "你是会议议题分析助手。输入是同一大时间段内带说话人标签的连续转写，说话人变化不代表议题变化。" +
-	"先识别少量稳定的领域级大主题，再把围绕同一问题、目标或决策的连续发言归为同一会议议题，并生成简短的小主题名称和简明介绍。" +
-	"相同或相近含义必须复用完全相同的大主题名称，不要用近义词重复建立大主题。" +
+const systemPrompt = "你是会议议题分析助手。输入是同一大时间段内带说话人标签的连续转写，说话人变化必须切分段落。" +
+	"先通读全部内容，按完整讨论识别少量大主题：同一事件、问题或目标的不同侧面必须复用完全相同的大主题，不要按段落局部措辞分别建立投资、市场、治理等领域类别。" +
+	"短暂插话或转向其他标的、领域不代表原讨论结束；后文回到先前人物、事件或同一行情因果链时，继续沿用原先大主题。" +
+	"但短暂插话如果包含独立实质内容，必须单独分类，不要把插话本身并入原主题；只有明确回到先前事件的后续内容才复用原主题。" +
+	"大主题名称应概括共同核心对象或事件并覆盖整场讨论，再把同一说话人围绕同一问题、目标或决策的连续发言归为同一会议议题，并生成简短的小主题名称和简明介绍。" +
 	"只有包含实质观点、问题、事实、方案、决策、分歧、任务或行动项的段落才标记 valuable=true；" +
 	"寒暄、闲聊、语气词、重复确认和无信息过渡标记 valuable=false，不要为了覆盖所有语句而制造主题。" +
 	"必须完整覆盖 1..N、连续且无重叠；不新增、删除或改写原文；只输出 JSON。"
@@ -65,13 +68,14 @@ type ClientConfig struct {
 }
 
 type Client struct {
-	mu      sync.RWMutex
-	baseURL string
-	apiKey  string
-	model   string
-	mimo    bool
-	http    *http.Client
-	onUsage func(model string, usage json.RawMessage, durationMs int64)
+	mu           sync.RWMutex
+	baseURL      string
+	apiKey       string
+	model        string
+	mimo         bool
+	http         *http.Client
+	categoryHTTP *http.Client
+	onUsage      func(model string, usage json.RawMessage, durationMs int64)
 }
 
 func NewClient(cfg ClientConfig) *Client {
@@ -84,13 +88,18 @@ func NewClient(cfg ClientConfig) *Client {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = requestTimeout
 	}
+	categoryTimeout := categoryRequestTimeout
+	if cfg.Timeout > categoryTimeout {
+		categoryTimeout = cfg.Timeout
+	}
 	return &Client{
-		baseURL: strings.TrimRight(cfg.BaseURL, "/"),
-		apiKey:  cfg.APIKey,
-		model:   cfg.Model,
-		mimo:    isMiMoURL(cfg.BaseURL),
-		http:    &http.Client{Timeout: cfg.Timeout},
-		onUsage: cfg.OnUsage,
+		baseURL:      strings.TrimRight(cfg.BaseURL, "/"),
+		apiKey:       cfg.APIKey,
+		model:        cfg.Model,
+		mimo:         isMiMoURL(cfg.BaseURL),
+		http:         &http.Client{Timeout: cfg.Timeout},
+		categoryHTTP: &http.Client{Timeout: categoryTimeout},
+		onUsage:      cfg.OnUsage,
 	}
 }
 
@@ -396,19 +405,23 @@ func invalidCorrection(err error) error {
 // complete posts a chat request and returns the first choice content. It falls
 // back to a schema-less retry when the server rejects response_format.
 func (c *Client) complete(ctx context.Context, request chatRequest) (string, error) {
+	return c.completeWithClient(ctx, request, c.http)
+}
+
+func (c *Client) completeWithClient(ctx context.Context, request chatRequest, httpClient *http.Client) (string, error) {
 	started := time.Now()
 	body, err := json.Marshal(request)
 	if err != nil {
 		return "", fmt.Errorf("encode 模型服务 request: %w", err)
 	}
-	raw, status, err := c.post(ctx, body)
+	raw, status, err := c.postWithClient(ctx, body, httpClient)
 	if status == http.StatusBadRequest && bytes.Contains(raw, []byte("response_format")) {
 		request.ResponseFormat = nil
 		body, err = json.Marshal(request)
 		if err != nil {
 			return "", fmt.Errorf("encode 模型服务 request: %w", err)
 		}
-		raw, status, err = c.post(ctx, body)
+		raw, status, err = c.postWithClient(ctx, body, httpClient)
 	}
 	if err != nil {
 		return "", err
@@ -451,13 +464,17 @@ func modelAPIError(status int, raw []byte) error {
 }
 
 func (c *Client) post(ctx context.Context, body []byte) ([]byte, int, error) {
+	return c.postWithClient(ctx, body, c.http)
+}
+
+func (c *Client) postWithClient(ctx context.Context, body []byte, httpClient *http.Client) ([]byte, int, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, err
 	}
 	request.Header.Set("Content-Type", "application/json")
 	c.authenticate(request)
-	response, err := c.http.Do(request)
+	response, err := httpClient.Do(request)
 	if err != nil {
 		return nil, 0, fmt.Errorf("模型服务 request failed: %w", err)
 	}
@@ -582,9 +599,9 @@ func BuildPrompt(texts []string) string {
 		}
 		fmt.Fprintf(&b, "%d. %s\n", i+1, line)
 	}
-	fmt.Fprintf(&b, "\n按会议议题切分连续发言，完整覆盖 1..%d，不重叠。同一议题可以包含多人的问答、讨论、决策和行动项；不要按说话人切分。"+
-		"每段提供不超过 8 字的领域级大主题 category、不超过 12 字的小主题 title、不超过 50 字且明确包含结论或待办的 summary，以及布尔值 valuable。"+
-		"当前时间段内相同或相近领域必须复用完全相同的 category，不要用近义词建立多个大类；title 要具体且不重复 category；summary 只写一两句，可用 **加粗** 或 `代码` 等行内 Markdown，不使用标题或列表。"+
+	fmt.Fprintf(&b, "\n按会议议题切分同一说话人的连续发言，完整覆盖 1..%d，不重叠。说话人变化必须另起新段，不得合并不同说话人的问答、讨论、决策和行动项。"+
+		"每段提供不超过 8 字的大主题 category、不超过 12 字的小主题 title、不超过 50 字且明确包含结论或待办的 summary，以及布尔值 valuable。"+
+		"当前时间段内，同一事件、问题或目标的不同侧面必须复用完全相同的 category，不要用近义词或不同领域词建立多个大类；短暂插话后回到先前讨论时继续沿用原 category，但有独立实质内容的插话本身必须单独分类；category 要能覆盖完整讨论，title 再描述该段的具体侧面且不重复 category；summary 只写一两句，可用 **加粗** 或 `代码` 等行内 Markdown，不使用标题或列表。"+
 		"有实质讨论价值时 valuable=true；寒暄、闲聊、语气词、重复确认和无信息过渡时 valuable=false，category、title 和 summary 留空。只输出 JSON。\n/no_think", len(texts))
 	return b.String()
 }

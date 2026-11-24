@@ -29,7 +29,6 @@ const elements = {
   voiceStateLabel: document.querySelector("#voiceStateLabel"),
   previewPanel: document.querySelector("#previewPanel"),
   previewNote: document.querySelector("#previewNote"),
-  splitParagraphsButton: document.querySelector("#splitParagraphsButton"),
   markdownDownload: document.querySelector("#markdownDownload"),
   markdownScroll: document.querySelector("#markdownScroll"),
   markdownPreview: document.querySelector("#markdownPreview"),
@@ -50,6 +49,7 @@ const elements = {
   calendarDetailFiles: document.querySelector("#calendarDetailFiles"),
   calendarDetailSize: document.querySelector("#calendarDetailSize"),
   calendarSummaryButton: document.querySelector("#calendarSummaryButton"),
+  calendarTopicsButton: document.querySelector("#calendarTopicsButton"),
   calendarOpenMinutesButton: document.querySelector("#calendarOpenMinutesButton"),
   calendarDeleteButton: document.querySelector("#calendarDeleteButton"),
   minutesDialog: document.querySelector("#minutesDialog"),
@@ -90,9 +90,9 @@ for (const element of [
   elements.privacyText,
   elements.voiceStateLabel,
   elements.speakerMergeHint,
-  elements.splitParagraphsButton,
   elements.topicsEmpty,
   elements.calendarSummaryButton,
+  elements.calendarTopicsButton,
   elements.minutesStatus,
 ]) {
   element.removeAttribute("data-i18n");
@@ -121,11 +121,11 @@ let previewLoaded = false;
 let previewTimer;
 let previewRequest = 0;
 let correctingPreview = false;
-let splittingPreview = false;
 let retranscribingPreview = false;
 let summarizingPreview = false;
 let paragraphCorrectionAvailable = false;
 let summarizingDay = false;
+let classifyingDay = false;
 let loadingMinutes = false;
 let activeMinutesDate = "";
 let activeMinutesGeneratedAt = "";
@@ -372,13 +372,17 @@ function renderDayDetail() {
   elements.calendarDetailChars.textContent = numberFormat.format(day.chars || 0);
   elements.calendarDetailFiles.textContent = numberFormat.format(day.audioFiles || 0);
   elements.calendarDetailSize.textContent = formatBytes(day.audioBytes);
+  const dayBusy = summarizingDay || loadingMinutes || classifyingDay;
   elements.calendarOpenMinutesButton.hidden = !day.minutes;
-  elements.calendarOpenMinutesButton.disabled = loadingMinutes || summarizingDay;
-  elements.calendarSummaryButton.disabled = summarizingDay || loadingMinutes || !day.segments || !paragraphCorrectionAvailable;
+  elements.calendarOpenMinutesButton.disabled = dayBusy;
+  elements.calendarSummaryButton.disabled = dayBusy || !day.segments || !paragraphCorrectionAvailable;
   elements.calendarSummaryButton.classList.toggle("is-regenerate", Boolean(day.minutes));
   elements.calendarSummaryButton.textContent = t(summarizingDay ? "minutes.generating" : day.minutes ? "minutes.regenerate" : "minutes.generate");
   elements.calendarSummaryButton.title = paragraphCorrectionAvailable ? "" : t("minutes.unavailable");
-  elements.calendarDeleteButton.disabled = summarizingDay || loadingMinutes || (!day.segments && !day.audioFiles);
+  elements.calendarTopicsButton.disabled = dayBusy || !day.segments || !paragraphCorrectionAvailable;
+  elements.calendarTopicsButton.textContent = t(classifyingDay ? "topics.classifying" : "topics.classify");
+  elements.calendarTopicsButton.title = paragraphCorrectionAvailable ? t("topics.classifyTitle") : t("topics.unavailable");
+  elements.calendarDeleteButton.disabled = dayBusy || (!day.segments && !day.audioFiles);
 }
 
 function openDeleteDialog() {
@@ -468,7 +472,7 @@ function showMinutesResult(result) {
 
 async function generateDayMinutes() {
   const date = selectedDay;
-  if (!date || summarizingDay || loadingMinutes || !paragraphCorrectionAvailable) return;
+  if (!date || summarizingDay || loadingMinutes || classifyingDay || !paragraphCorrectionAvailable) return;
   summarizingDay = true;
   renderDayDetail();
   openMinutesDialog(date, "minutes.working");
@@ -486,9 +490,41 @@ async function generateDayMinutes() {
   }
 }
 
+async function classifyDayTopics() {
+  const date = selectedDay;
+  if (!date || classifyingDay || summarizingDay || loadingMinutes || !paragraphCorrectionAvailable) return;
+  classifyingDay = true;
+  renderDayDetail();
+  elements.previewNote.textContent = t("topics.classifyWorking");
+  elements.previewNote.classList.remove("is-error");
+
+  try {
+    const result = await api(`/api/days/${encodeURIComponent(date)}/topics`, { method: "POST" });
+    if (selectedDay !== date) return;
+    const refreshed = await loadMarkdown();
+    if (!refreshed) {
+      elements.previewNote.textContent = t("topics.classifyRefreshFailed");
+      elements.previewNote.classList.add("is-error");
+    } else if (result.fallback) {
+      elements.previewNote.textContent = t("topics.classifyFallback", { count: result.paragraphs, fallback: result.fallback });
+    } else {
+      elements.previewNote.textContent = t("topics.classifyDone", { count: result.paragraphs });
+    }
+  } catch (error) {
+    if (selectedDay === date) {
+      elements.previewNote.textContent = t("topics.classifyFailed", { message: error.message });
+      elements.previewNote.classList.add("is-error");
+    }
+  } finally {
+    classifyingDay = false;
+    renderDayDetail();
+    if (selectedDay === date) elements.calendarTopicsButton.focus();
+  }
+}
+
 async function openDayMinutes() {
   const date = selectedDay;
-  if (!date || loadingMinutes || summarizingDay) return;
+  if (!date || loadingMinutes || summarizingDay || classifyingDay) return;
   loadingMinutes = true;
   renderDayDetail();
   openMinutesDialog(date, "minutes.loading");
@@ -624,10 +660,8 @@ async function loadSettingsButton() {
   try {
     const settings = await api("/api/settings");
     updateASRPresentation(settings.asr);
-    elements.splitParagraphsButton.hidden = !settings.available;
     paragraphCorrectionAvailable = Boolean(settings.available);
   } catch {
-    elements.splitParagraphsButton.hidden = true;
     paragraphCorrectionAvailable = false;
   }
   renderDayDetail();
@@ -703,7 +737,7 @@ async function loadMarkdown(scrollToStart = false) {
       scroll.scrollTop = previousTop;
     }
     previewLoaded = true;
-    if (!correctingPreview && !splittingPreview && !retranscribingPreview && !summarizingPreview) {
+    if (!correctingPreview && !retranscribingPreview && !summarizingPreview && !classifyingDay) {
       elements.previewNote.textContent = selectedDay
         ? t("preview.date", { date: formatDayLabel(selectedDay) })
         : t("preview.recent", { limit: previewLimit });
@@ -829,7 +863,7 @@ function addParagraphCorrectionButtons(paragraphs) {
     button.className = "md-correct";
     button.dataset.paragraphId = paragraph.id;
     button.textContent = t("paragraph.correct");
-    button.disabled = correctingPreview || splittingPreview || retranscribingPreview || summarizingPreview;
+    button.disabled = correctingPreview || retranscribingPreview || summarizingPreview || classifyingDay;
     button.title = t("paragraph.correctTitle");
     button.setAttribute("aria-label", t("paragraph.correctLabel", { time: strong.textContent }));
     const asrButton = document.createElement("button");
@@ -837,7 +871,7 @@ function addParagraphCorrectionButtons(paragraphs) {
     asrButton.className = "md-asr";
     asrButton.dataset.paragraphId = paragraph.id;
     asrButton.textContent = "ASR";
-    asrButton.disabled = correctingPreview || splittingPreview || retranscribingPreview || summarizingPreview;
+    asrButton.disabled = correctingPreview || retranscribingPreview || summarizingPreview || classifyingDay;
     asrButton.title = t("paragraph.asrTitle");
     asrButton.setAttribute("aria-label", t("paragraph.asrLabel", { time: strong.textContent }));
     const summaryButton = document.createElement("button");
@@ -845,58 +879,16 @@ function addParagraphCorrectionButtons(paragraphs) {
     summaryButton.className = "md-summary";
     summaryButton.dataset.paragraphId = paragraph.id;
     summaryButton.textContent = t("paragraph.summary");
-    summaryButton.disabled = correctingPreview || splittingPreview || retranscribingPreview || summarizingPreview;
+    summaryButton.disabled = correctingPreview || retranscribingPreview || summarizingPreview || classifyingDay;
     summaryButton.title = t("paragraph.summaryTitle");
     summaryButton.setAttribute("aria-label", t("paragraph.summaryLabel", { time: strong.textContent }));
     item.append(" ", button, " ", asrButton, " ", summaryButton);
   }
 }
 
-async function splitParagraphs() {
-  if (correctingPreview || splittingPreview || retranscribingPreview || summarizingPreview) return;
-  splittingPreview = true;
-  elements.splitParagraphsButton.disabled = true;
-  elements.splitParagraphsButton.textContent = t("paragraph.splitting");
-  for (const item of elements.markdownPreview.querySelectorAll(".md-correct, .md-asr, .md-summary")) {
-    item.disabled = true;
-  }
-  elements.previewNote.textContent = t("paragraph.splitWorking", { limit: previewLimit });
-  elements.previewNote.classList.remove("is-error");
-  try {
-    const result = await api("/api/paragraphs/split", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ limit: previewLimit }),
-    });
-    const refreshed = await loadMarkdown();
-    if (!refreshed) {
-      elements.previewNote.textContent = t("paragraph.splitRefreshFailed");
-      elements.previewNote.classList.add("is-error");
-    } else if (!result.paragraphs) {
-      elements.previewNote.textContent = t("paragraph.noRecords");
-    } else if (result.fallback) {
-      elements.previewNote.textContent = t("paragraph.splitFallback", { count: result.paragraphs, fallback: result.fallback });
-    } else {
-      elements.previewNote.textContent = t("paragraph.splitDone", { count: result.paragraphs });
-    }
-  } catch (error) {
-    elements.previewNote.textContent = t("paragraph.splitFailed", { message: error.message });
-    elements.previewNote.classList.add("is-error");
-  } finally {
-    splittingPreview = false;
-    elements.splitParagraphsButton.disabled = false;
-    elements.splitParagraphsButton.textContent = t("preview.split");
-    for (const item of elements.markdownPreview.querySelectorAll(".md-correct, .md-asr, .md-summary")) {
-      item.disabled = false;
-    }
-    elements.splitParagraphsButton.focus();
-  }
-}
-
 async function correctParagraph(id, button) {
-  if (correctingPreview || splittingPreview || retranscribingPreview || summarizingPreview) return;
+  if (correctingPreview || retranscribingPreview || summarizingPreview || classifyingDay) return;
   correctingPreview = true;
-  elements.splitParagraphsButton.disabled = true;
   for (const item of elements.markdownPreview.querySelectorAll(".md-correct, .md-asr, .md-summary")) {
     item.disabled = true;
   }
@@ -919,7 +911,6 @@ async function correctParagraph(id, button) {
     elements.previewNote.classList.add("is-error");
   } finally {
     correctingPreview = false;
-    elements.splitParagraphsButton.disabled = false;
     let restored;
     for (const item of elements.markdownPreview.querySelectorAll(".md-correct")) {
       item.disabled = false;
@@ -931,9 +922,8 @@ async function correctParagraph(id, button) {
 }
 
 async function retranscribeParagraph(id, button) {
-  if (correctingPreview || splittingPreview || retranscribingPreview || summarizingPreview) return;
+  if (correctingPreview || retranscribingPreview || summarizingPreview || classifyingDay) return;
   retranscribingPreview = true;
-  elements.splitParagraphsButton.disabled = true;
   for (const item of elements.markdownPreview.querySelectorAll(".md-correct, .md-asr, .md-summary")) {
     item.disabled = true;
   }
@@ -956,7 +946,6 @@ async function retranscribeParagraph(id, button) {
     elements.previewNote.classList.add("is-error");
   } finally {
     retranscribingPreview = false;
-    elements.splitParagraphsButton.disabled = false;
     let restored;
     for (const item of elements.markdownPreview.querySelectorAll(".md-correct, .md-asr, .md-summary")) {
       item.disabled = false;
@@ -968,9 +957,8 @@ async function retranscribeParagraph(id, button) {
 }
 
 async function summarizeParagraph(id, button) {
-  if (correctingPreview || splittingPreview || retranscribingPreview || summarizingPreview) return;
+  if (correctingPreview || retranscribingPreview || summarizingPreview || classifyingDay) return;
   summarizingPreview = true;
-  elements.splitParagraphsButton.disabled = true;
   for (const item of elements.markdownPreview.querySelectorAll(".md-correct, .md-asr, .md-summary")) {
     item.disabled = true;
   }
@@ -991,7 +979,6 @@ async function summarizeParagraph(id, button) {
     elements.previewNote.classList.add("is-error");
   } finally {
     summarizingPreview = false;
-    elements.splitParagraphsButton.disabled = false;
     let restored;
     for (const item of elements.markdownPreview.querySelectorAll(".md-correct, .md-asr, .md-summary")) {
       item.disabled = false;
@@ -1163,7 +1150,6 @@ i18n.subscribe(() => {
     else if (loadingMinutes) elements.minutesStatus.textContent = t("minutes.loading");
   }
   elements.connectionText.textContent = t(elements.connection.classList.contains("is-connected") ? "connection.connected" : "connection.reconnecting");
-  elements.splitParagraphsButton.textContent = t(splittingPreview ? "paragraph.splitting" : "preview.split");
   if (elements.speakerDialog.open) {
     elements.speakerDialogLabel.textContent = i18n.speakerLabel(activeSpeakerLabel);
     updateSpeakerMergeHint();
@@ -1205,6 +1191,7 @@ elements.calendarGrid.addEventListener("click", (event) => {
   showCalendarSelection();
 });
 elements.calendarSummaryButton.addEventListener("click", generateDayMinutes);
+elements.calendarTopicsButton.addEventListener("click", classifyDayTopics);
 elements.calendarOpenMinutesButton.addEventListener("click", openDayMinutes);
 elements.calendarDeleteButton.addEventListener("click", openDeleteDialog);
 elements.minutesCloseIcon.addEventListener("click", () => elements.minutesDialog.close());
@@ -1251,7 +1238,6 @@ elements.topicList.addEventListener("click", (event) => {
   event.preventDefault();
   jumpToParagraph(link.dataset.paragraphId);
 });
-elements.splitParagraphsButton.addEventListener("click", splitParagraphs);
 elements.hidePreviewButton.addEventListener("click", () => {
   previewVisible = false;
   savePreviewPreference(false);

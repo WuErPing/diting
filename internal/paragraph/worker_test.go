@@ -159,7 +159,7 @@ func TestWorkerSplitsLongPauses(t *testing.T) {
 	}
 }
 
-func TestWorkerBuildsTopicAcrossSpeakerChange(t *testing.T) {
+func TestWorkerSplitsTopicAtSpeakerChange(t *testing.T) {
 	clock := newFakeClock(testBase)
 	paragraphStore := openTestStore(t)
 	grouper := &fakeGrouper{fn: func(_ int, _ context.Context, texts []string) ([]Group, error) {
@@ -173,13 +173,16 @@ func TestWorkerBuildsTopicAcrossSpeakerChange(t *testing.T) {
 	waitFor(t, "first paragraph", func() bool { return len(paragraphStore.All()) == 1 })
 	worker.Notify(testSegment("b", "说话人2", "周五前审批。", testBase.Add(2*time.Second), testBase.Add(3*time.Second)))
 
-	waitFor(t, "multi-speaker topic", func() bool {
+	waitFor(t, "speaker-specific paragraphs", func() bool {
 		all := paragraphStore.All()
-		return len(all) == 1 && all[0].Source == SourceLLM && len(all[0].SegmentIDs) == 2
+		return len(all) == 2 && all[0].Source == SourceLLM && all[1].Source == SourceLLM
 	})
-	topic := paragraphStore.All()[0]
-	if topic.Title != "预算审批" || topic.Speaker != "" || topic.Text != "预算十万。周五前审批。" {
-		t.Fatalf("topic = %+v", topic)
+	paragraphs := paragraphStore.All()
+	if paragraphs[0].Title != "预算审批" || paragraphs[0].Speaker != "说话人1" || paragraphs[0].Text != "预算十万。" {
+		t.Fatalf("first = %+v", paragraphs[0])
+	}
+	if paragraphs[1].Title != "预算审批" || paragraphs[1].Speaker != "说话人2" || paragraphs[1].Text != "周五前审批。" {
+		t.Fatalf("second = %+v", paragraphs[1])
 	}
 	calls := grouper.snapshot()
 	last := calls[len(calls)-1]
@@ -654,6 +657,42 @@ func TestCanonicalizeCategoryPeriodRetriesOnce(t *testing.T) {
 	canonicalizeCategoryPeriod(context.Background(), paragraphs, grouper)
 	if len(grouper.periods) != 2 || paragraphs[0].Category != "薪酬绩效" || paragraphs[1].Category != "薪酬绩效" {
 		t.Fatalf("calls = %d, paragraphs = %+v", len(grouper.periods), paragraphs)
+	}
+}
+
+func TestCanonicalizeCategoryPeriodFallsBackToSingleCategory(t *testing.T) {
+	grouper := &fakeCanonicalGrouper{failures: 2}
+	paragraphs := []Paragraph{
+		{ID: "a", Text: "讨论调薪。", Category: "薪酬分配", SegmentIDs: []string{"a"}},
+		{ID: "b", Text: "确认激励。", Category: "薪酬激励", SegmentIDs: []string{"b"}},
+	}
+	canonicalizeCategoryPeriod(context.Background(), paragraphs, grouper)
+	if len(grouper.periods) != 2 || paragraphs[0].Category != "薪酬分配" || paragraphs[1].Category != "薪酬分配" {
+		t.Fatalf("calls = %d, paragraphs = %+v", len(grouper.periods), paragraphs)
+	}
+}
+
+func TestCanonicalizeCategoryPeriodProvidesChronologicalTranscriptContext(t *testing.T) {
+	grouper := &fakeCanonicalGrouper{}
+	paragraphs := []Paragraph{
+		{
+			ID: "a", Text: "黄仁勋回归后，英伟达和半导体行情上涨。", Category: "英伟达CEO回归",
+			Title: "回归与股价", Summary: "回归带动股价。", StartedAt: testBase, SegmentIDs: []string{"a"},
+		},
+		{
+			ID: "b", Text: "做空和杠杆仓位在快速反弹中爆仓。", Category: "加密货币行情",
+			Title: "杠杆爆仓", Summary: "杠杆仓位爆仓。", StartedAt: testBase.Add(time.Minute), SegmentIDs: []string{"b"},
+		},
+	}
+	canonicalizeCategoryPeriod(context.Background(), paragraphs, grouper)
+	if len(grouper.periods) != 1 || len(grouper.periods[0]) != 2 {
+		t.Fatalf("periods = %+v", grouper.periods)
+	}
+	first := grouper.periods[0][0].Topics[0]
+	for _, want := range []string{testBase.Local().Format("15:04:05"), "回归与股价", "回归带动股价", "黄仁勋回归后，英伟达和半导体行情上涨。"} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("context missing %q: %s", want, first)
+		}
 	}
 }
 

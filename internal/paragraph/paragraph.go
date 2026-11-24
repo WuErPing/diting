@@ -18,7 +18,7 @@ const (
 const (
 	defaultMaxSegments = 20
 	defaultMaxChars    = 3000
-	defaultMaxSilence  = 10 * time.Minute
+	defaultMaxSilence  = 15 * time.Minute
 )
 
 type Paragraph struct {
@@ -283,54 +283,52 @@ func NormalizeGroups(groups []Group, n int) ([]Group, bool, error) {
 	return repaired, changed, nil
 }
 
-// ComposeParagraphs turns validated groups into paragraphs without altering text.
+// ComposeParagraphs turns validated groups into single-speaker paragraphs without altering text.
 func ComposeParagraphs(run []store.Segment, groups []Group, source, model string, now time.Time, resolve func(string) string) []Paragraph {
 	paragraphs := make([]Paragraph, 0, len(groups))
+	resolveSpeaker := func(label string) string {
+		if resolve != nil {
+			return resolve(label)
+		}
+		return label
+	}
 	for _, group := range groups {
 		members := run[group.Start-1 : group.End]
-		if len(members) == 0 {
-			continue
-		}
-		ids := make([]string, len(members))
-		for i, member := range members {
-			ids[i] = member.ID
-		}
-		speaker := members[0].Speaker
-		if resolve != nil {
-			speaker = resolve(speaker)
-		}
-		for _, member := range members[1:] {
-			other := member.Speaker
-			if resolve != nil {
-				other = resolve(other)
+		for start := 0; start < len(members); {
+			speaker := resolveSpeaker(members[start].Speaker)
+			end := start + 1
+			for end < len(members) && resolveSpeaker(members[end].Speaker) == speaker {
+				end++
 			}
-			if other != speaker {
-				speaker = ""
-				break
+			turn := members[start:end]
+			ids := make([]string, len(turn))
+			for i, member := range turn {
+				ids[i] = member.ID
 			}
+			text := JoinTexts(turn)
+			category, title, summary := "", "", ""
+			if !group.TopicExcluded && hasTopicText(text) {
+				category = truncateTopicText(compactTopicText(group.Category), 8)
+				title = topicTitle(group.Title, text)
+				summary = topicSummary(group.Summary, text)
+			}
+			paragraphs = append(paragraphs, Paragraph{
+				ID:            turn[0].ID,
+				StartedAt:     turn[0].StartedAt,
+				EndedAt:       turn[len(turn)-1].EndedAt,
+				Speaker:       speaker,
+				Text:          text,
+				Category:      category,
+				Title:         title,
+				Summary:       summary,
+				TopicExcluded: group.TopicExcluded,
+				SegmentIDs:    ids,
+				Source:        source,
+				Model:         model,
+				UpdatedAt:     now,
+			})
+			start = end
 		}
-		text := JoinTexts(members)
-		category, title, summary := "", "", ""
-		if !group.TopicExcluded && hasTopicText(text) {
-			category = truncateTopicText(compactTopicText(group.Category), 8)
-			title = topicTitle(group.Title, text)
-			summary = topicSummary(group.Summary, text)
-		}
-		paragraphs = append(paragraphs, Paragraph{
-			ID:            members[0].ID,
-			StartedAt:     members[0].StartedAt,
-			EndedAt:       members[len(members)-1].EndedAt,
-			Speaker:       speaker,
-			Text:          text,
-			Category:      category,
-			Title:         title,
-			Summary:       summary,
-			TopicExcluded: group.TopicExcluded,
-			SegmentIDs:    ids,
-			Source:        source,
-			Model:         model,
-			UpdatedAt:     now,
-		})
 	}
 	return paragraphs
 }

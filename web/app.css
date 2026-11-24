@@ -267,6 +267,7 @@ h1 {
 .calendar-detail-stats div { padding: 3px 0; }
 .calendar-detail .minutes-open-button { margin-bottom: 8px; }
 .calendar-detail .minutes-open-button[hidden] { display: none; }
+.calendar-detail .topics-classify-button { margin-top: 8px; }
 .calendar-detail .primary-button.is-regenerate {
   min-height: 40px;
   background: transparent;

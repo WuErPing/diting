@@ -8,7 +8,7 @@
   }
   root.DitingTopics = moduleApi;
 })(typeof globalThis !== "undefined" ? globalThis : this, function createModule() {
-  const maxSilenceMs = 10 * 60 * 1000;
+  const maxSilenceMs = 15 * 60 * 1000;
 
   function groupTopics(paragraphs, fallbackCategory) {
     const groups = [];

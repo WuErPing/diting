@@ -204,6 +204,13 @@ func (s *Settings) SplitRecent(ctx context.Context, limit int) (RebuildStats, er
 	return s.worker.SplitRecent(ctx, limit)
 }
 
+func (s *Settings) ClassifyDay(ctx context.Context, date string) (DayTopicsResult, error) {
+	if s.worker == nil {
+		return DayTopicsResult{Date: date}, ErrDayTopicsUnavailable
+	}
+	return s.worker.ClassifyDay(ctx, date)
+}
+
 // apply pushes the current state to all runtime controllers. They may be nil in
 // tests or when the corresponding feature is disabled.
 func (s *Settings) apply() {

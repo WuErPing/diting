@@ -99,6 +99,7 @@
             </dl>
             <button class="primary-button minutes-open-button" id="calendarOpenMinutesButton" type="button" data-i18n="minutes.open" hidden>Open meeting minutes</button>
             <button class="primary-button" id="calendarSummaryButton" type="button" data-i18n="minutes.generate">Generate meeting minutes</button>
+            <button class="primary-button topics-classify-button" id="calendarTopicsButton" type="button" data-i18n="topics.classify" data-i18n-title="topics.classifyTitle" title="Use the current model to classify all transcripts from this day. Original transcripts remain unchanged">Classify topics</button>
             <button class="danger-button" id="calendarDeleteButton" type="button" data-i18n="action.moveTrash">Move to Trash</button>
           </div>
         </section>
@@ -119,7 +120,6 @@
             <div class="preview-actions">
               <a class="text-button" href="/records.html" data-i18n="action.records">Voice records</a>
               <button class="text-button" id="showPreviewButton" type="button" data-i18n="preview.show" hidden>Show transcript</button>
-              <button class="text-button" id="splitParagraphsButton" type="button" data-i18n="preview.split" data-i18n-title="preview.splitTitle" title="Use the current model to split the latest 500 records by meeting topic. Original transcripts remain unchanged" hidden>Split by topic</button>
               <a class="text-button" id="markdownDownload" href="/api/markdown?download=1&lang=en" data-i18n="preview.download" download>Download .md</a>
               <button class="icon-button" id="hidePreviewButton" type="button" data-i18n-aria-label="preview.hideLabel" data-i18n-title="preview.hide" aria-label="Hide merged transcript preview" title="Hide preview">×</button>
             </div>
@@ -141,7 +141,7 @@
           <h2 id="topicsTitle" data-i18n="topics.title">Topic index</h2>
           <p class="topics-note" data-i18n="topics.note">Only meeting topics worth discussing are included</p>
         </div>
-        <p class="topics-empty" id="topicsEmpty" data-i18n="topics.empty">No topics yet. After recording, use “Split by topic” to generate them.</p>
+        <p class="topics-empty" id="topicsEmpty" data-i18n="topics.empty">No topics yet. Select a date and use “Classify topics”, or keep recording to generate them automatically.</p>
         <ol class="topic-list" id="topicList"></ol>
       </aside>
     </main>

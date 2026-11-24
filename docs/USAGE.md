@@ -95,11 +95,11 @@ DITING_LOG_LEVEL=LEVEL        日志级别：debug、info、warn、error，默�
 
 #### 首页
 
-- **左侧**：运行状态、麦克风启停、全量归档统计和按天日历。日历格子的颜色深浅按当天录音体积分级；点击日期可筛选当天文稿、查看统计、生成或重新打开会议纪要，并把整天数据移到废纸篓。
-- **中间**：Markdown 合并文稿，讲话时在末尾显示临时文本，品牌旁动画区分等待人声与正在说话。可进入声音记录页、按主题重新分段、下载完整 `.md` 或隐藏文稿。
-- **右侧**：主题按“大时间段 + 大主题 → 小主题”归组，显示时段、简短标题和支持 Markdown 的总结。默认只展开最新大类，其余折叠，手动展开状态在刷新时保留；点击小主题可定位到对应文稿段落。
+- **左侧**：运行状态、麦克风启停、全量归档统计和按天日历。日历格子的颜色深浅按当天录音体积分级；点击日期可筛选当天文稿、查看统计、按当前模型重新分类主题、生成或重新打开会议纪要，并把整天数据移到废纸篓。
+- **中间**：Markdown 合并文稿，讲话时在末尾显示临时文本，品牌旁动画区分等待人声与正在说话。可进入声音记录页、下载完整 `.md` 或隐藏文稿。
+- **右侧**：主题按“大时间段 + 大主题 → 小主题”归组，15 分钟静音才开启新的大时间段；每个时间段只保留一个大主题，具体差异由小主题承载。显示时段、简短标题和支持 Markdown 的总结。默认只展开最新大类，其余折叠，手动展开状态在刷新时保留；点击小主题可定位到对应文稿段落。
 
-跨说话人的连续发言会异步合并为带起止时间的议题段落，默认展示最近 500 条记录。寒暄、闲聊、语气词和无信息过渡保留在文稿中，但不进入主题索引。段落正文逐字拼接，不润色、不改写原始逐句转写。
+同一说话人的连续发言会异步合并为带起止时间的议题段落，说话人变化时强制另起一段，默认展示最近 500 条记录。寒暄、闲聊、语气词和无信息过渡保留在文稿中，但不进入主题索引。段落正文逐字拼接，不润色、不改写原始逐句转写。
 
 每个派生段落提供以下操作：
 
@@ -107,7 +107,7 @@ DITING_LOG_LEVEL=LEVEL        日志级别：debug、info、warn、error，默�
 - **ASR**：用当前本地或 MiMo 模型重新识别该段全部录音，并同步更新原始转写和该段落；任一录音不可用时整段不改。
 - **总结**：生成独立摘要并显示在正文下方，不改写原文、主题名称或主题简介。
 
-选择日期后，可用当前段落模型生成当天会议纪要，查看渲染结果与 Markdown 原文并下载 `.md`。会议纪要保存在 `data/minutes/`，之后可重新打开；生成纪要不会改写原始转写或派生段落。
+选择日期后，可用当前段落模型点击“主题分类”重建当天的派生段落和主题索引，其他日期及原始转写不受影响。也可用当前段落模型生成当天会议纪要，查看渲染结果与 Markdown 原文并下载 `.md`。会议纪要保存在 `data/minutes/`，之后可重新打开；生成纪要不会改写原始转写或派生段落。
 
 #### 声音记录与配置
 
@@ -294,6 +294,7 @@ DELETE /api/days/{date}      删除某天转写，并把 audio/YYYYMMDD 移到�
                              支持 ?dryRun=1 预览影响面；删除前自动快照
 POST /api/days/{date}/minutes 生成并保存当天 Markdown 会议纪要
 GET /api/days/{date}/minutes  读取已保存的当天会议纪要
+POST /api/days/{date}/topics  用当前模型重建当天的派生段落与主题分类
 GET /api/settings            当前段落模型、语义修正与 ASR 选择
 PUT /api/settings            {"model":"mimo-v2.6-flash","correct":false,"asr":"local|mimo"}
 GET /api/models              当前 OpenAI 兼容端点的模型列表
@@ -435,11 +436,11 @@ The home page, records page, and settings page all use the embedded brand logo a
 
 #### Home Page
 
-- **Left**: running state, microphone start/stop, full archive statistics, and a daily calendar. Calendar cell shading scales with the day's recording volume; clicking a date filters that day's transcript, shows statistics, generates or reopens meeting minutes, and can move the whole day's data to the Trash.
-- **Center**: the merged Markdown transcript, with interim text appended at the end while speaking and an animation next to the brand mark distinguishing waiting for speech from active speaking. You can open the records page, re-split by topic, download the full `.md`, or hide the transcript.
-- **Right**: topics grouped by "major time period + major topic → minor topic", showing the time range, a short title, and a Markdown-capable summary. Only the latest group is expanded by default, the rest are collapsed, and manual expansion state survives refreshes; clicking a minor topic jumps to the corresponding transcript paragraph.
+- **Left**: running state, microphone start/stop, full archive statistics, and a daily calendar. Calendar cell shading scales with the day's recording volume; clicking a date filters that day's transcript, shows statistics, reclassifies topics with the current model, generates or reopens meeting minutes, and can move the whole day's data to the Trash.
+- **Center**: the merged Markdown transcript, with interim text appended at the end while speaking and an animation next to the brand mark distinguishing waiting for speech from active speaking. You can open the records page, download the full `.md`, or hide the transcript.
+- **Right**: topics grouped by "major time period + major topic → minor topic". A new major time period starts only after 15 minutes of silence; each period keeps one major topic while minor topics retain specific differences. The panel shows the time range, a short title, and a Markdown-capable summary. Only the latest group is expanded by default, the rest are collapsed, and manual expansion state survives refreshes; clicking a minor topic jumps to the corresponding transcript paragraph.
 
-Continuous cross-speaker speech is merged asynchronously into topic paragraphs with start/end times; the latest 500 records are shown by default. Greetings, small talk, fillers, and low-information transitions stay in the transcript but do not enter the topic index. Paragraph bodies are concatenated verbatim — no polishing, no rewriting of the original per-utterance transcripts.
+Continuous speech from the same speaker is merged asynchronously into topic paragraphs with start/end times, while a speaker change always starts a new paragraph; the latest 500 records are shown by default. Greetings, small talk, fillers, and low-information transitions stay in the transcript but do not enter the topic index. Paragraph bodies are concatenated verbatim — no polishing, no rewriting of the original per-utterance transcripts.
 
 Each derived paragraph offers these actions:
 
@@ -447,7 +448,7 @@ Each derived paragraph offers these actions:
 - **ASR**: re-recognizes all recordings of the paragraph with the current local or MiMo model, updating both the original transcripts and the paragraph; if any recording is unavailable, the whole paragraph is left unchanged.
 - **Summarize**: generates a standalone digest shown below the body, without rewriting the original text, topic name, or topic summary.
 
-After selecting a date, you can generate that day's meeting minutes with the current paragraph model, view the rendered result and raw Markdown, and download the `.md`. Minutes are saved in `data/minutes/` and can be reopened later; generating minutes never rewrites original transcripts or derived paragraphs.
+After selecting a date, “Classify topics” rebuilds that day's derived paragraphs and topic index with the current paragraph model without changing other dates or original transcripts. You can also generate that day's meeting minutes with the current paragraph model, view the rendered result and raw Markdown, and download the `.md`. Minutes are saved in `data/minutes/` and can be reopened later; generating minutes never rewrites original transcripts or derived paragraphs.
 
 #### Records and Settings
 
@@ -634,6 +635,7 @@ DELETE /api/days/{date}      Delete a day's transcripts and move audio/YYYYMMDD 
                              Supports ?dryRun=1 impact preview; automatic snapshot before deletion
 POST /api/days/{date}/minutes Generate and save the day's Markdown meeting minutes
 GET /api/days/{date}/minutes  Read the day's saved meeting minutes
+POST /api/days/{date}/topics  Rebuild the day's derived paragraphs and topic classifications with the current model
 GET /api/settings            Current paragraph model, semantic correction, and ASR selection
 PUT /api/settings            {"model":"mimo-v2.6-flash","correct":false,"asr":"local|mimo"}
 GET /api/models              Model list of the current OpenAI-compatible endpoint

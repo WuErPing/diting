@@ -28,8 +28,8 @@ test("topics form an ordered two-level tree and exclude low-value paragraphs", (
 test("same-category topics stay in separate large time periods", () => {
   const groups = groupTopics([
     { id: "a", category: "薪酬绩效", startedAt: "2026-11-22T16:00:00+08:00", endedAt: "2026-11-22T16:02:00+08:00" },
-    { id: "b", category: "薪酬绩效", startedAt: "2026-11-22T16:08:00+08:00", endedAt: "2026-11-22T16:09:00+08:00" },
-    { id: "c", category: "薪酬绩效", startedAt: "2026-11-22T16:20:00+08:00", endedAt: "2026-11-22T16:21:00+08:00" },
+    { id: "b", category: "薪酬绩效", startedAt: "2026-11-22T16:16:59+08:00", endedAt: "2026-11-22T16:17:30+08:00" },
+    { id: "c", category: "薪酬绩效", startedAt: "2026-11-22T16:32:30+08:00", endedAt: "2026-11-22T16:33:00+08:00" },
   ], "其他主题");
 
   assert.deepEqual(groups.map((group) => ({
@@ -38,8 +38,8 @@ test("same-category topics stay in separate large time periods", () => {
     startedAt: group.startedAt,
     endedAt: group.endedAt,
   })), [
-    { key: "0|薪酬绩效", ids: ["a", "b"], startedAt: "2026-11-22T16:00:00+08:00", endedAt: "2026-11-22T16:09:00+08:00" },
-    { key: "1|薪酬绩效", ids: ["c"], startedAt: "2026-11-22T16:20:00+08:00", endedAt: "2026-11-22T16:21:00+08:00" },
+    { key: "0|薪酬绩效", ids: ["a", "b"], startedAt: "2026-11-22T16:00:00+08:00", endedAt: "2026-11-22T16:17:30+08:00" },
+    { key: "1|薪酬绩效", ids: ["c"], startedAt: "2026-11-22T16:32:30+08:00", endedAt: "2026-11-22T16:33:00+08:00" },
   ]);
 });
 
