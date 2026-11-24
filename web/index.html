@@ -14,7 +14,7 @@
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <div class="app-shell">
+  <div class="app-shell home-shell">
     <header class="masthead">
       <div class="identity">
         <img class="seal" src="/logo.svg" alt="" width="52" height="52">
@@ -23,13 +23,21 @@
           <h1 data-i18n="brand.name">Diting</h1>
           <p class="tagline" data-i18n="tagline.home">Voices only. Every word, timed.</p>
         </div>
+      </div>
+      <section class="listener-panel" data-i18n-aria-label="controls.label" aria-label="Listening controls">
         <div class="voice-state is-waiting" id="voiceState" role="status" hidden>
           <span class="voice-state-bars" aria-hidden="true">
             <span></span><span></span><span></span><span></span><span></span>
           </span>
           <span class="voice-state-label" id="voiceStateLabel" data-i18n="voice.waiting">Waiting for speech</span>
         </div>
-      </div>
+        <button class="icon-button listener-toggle" id="toggleButton" type="button" data-i18n-aria-label="action.startListening" data-i18n-title="action.startListening" aria-label="Start listening" title="Start listening" disabled>
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+            <path id="toggleIconPath" d="M8 5v14l11-7z" fill="currentColor"></path>
+          </svg>
+        </button>
+        <p class="error-message" id="errorMessage" role="alert" hidden></p>
+      </section>
       <div class="masthead-actions">
         <a class="text-button masthead-config" href="/speakers.html" data-i18n="action.speakers">Voiceprints</a>
         <a class="text-button masthead-config" href="/settings.html" data-i18n="action.config">Configuration</a>
@@ -49,17 +57,6 @@
 
     <main class="console">
       <aside class="control-column" data-i18n-aria-label="controls.label" aria-label="Listening controls">
-        <section class="listener-panel" aria-labelledby="listenerTitle">
-          <div class="on-air">
-            <span class="status-dot" id="statusDot" aria-hidden="true"></span>
-            <span id="stateLabel" data-i18n="state.preparing">Preparing</span>
-          </div>
-          <h2 id="listenerTitle" data-i18n="listener.idleTitle">Waiting for voices</h2>
-          <p class="state-hint" id="stateHint" data-i18n="listener.idleHint">Once started, audio is saved only when speech is detected.</p>
-          <button class="primary-button" id="toggleButton" type="button" data-i18n="action.startListening" disabled>Start listening</button>
-          <p class="error-message" id="errorMessage" role="alert" hidden></p>
-        </section>
-
         <section class="session-panel" aria-labelledby="sessionTitle">
           <h2 id="sessionTitle" data-i18n="session.title">This session</h2>
           <dl class="stats">
@@ -113,10 +110,7 @@
       <div class="transcript-panel">
         <section class="preview-panel" id="previewPanel" aria-labelledby="previewTitle">
           <div class="preview-header">
-            <div>
-              <p class="eyebrow">MARKDOWN</p>
-              <h2 id="previewTitle" data-i18n="preview.title">Merged transcript</h2>
-            </div>
+            <h2 id="previewTitle" data-i18n="preview.title">Diting Transcript</h2>
             <div class="preview-actions">
               <a class="text-button" href="/records.html" data-i18n="action.records">Voice records</a>
               <button class="text-button" id="showPreviewButton" type="button" data-i18n="preview.show" hidden>Show transcript</button>

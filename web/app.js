@@ -2,7 +2,7 @@
 
 const i18n = window.DitingI18n;
 const { groupTopics, topicGroupOpen } = window.DitingTopics;
-const { renderMarkdown } = window.DitingMarkdown;
+const { renderMarkdown, renderTranscriptPreview } = window.DitingMarkdown;
 const { voicePresentation } = window.DitingVoiceState;
 const t = (key, variables) => i18n.t(key, variables);
 
@@ -11,10 +11,8 @@ const elements = {
   connection: document.querySelector("#connection"),
   connectionText: document.querySelector("#connectionText"),
   listenerPanel: document.querySelector(".listener-panel"),
-  stateLabel: document.querySelector("#stateLabel"),
-  listenerTitle: document.querySelector("#listenerTitle"),
-  stateHint: document.querySelector("#stateHint"),
   toggleButton: document.querySelector("#toggleButton"),
+  toggleIconPath: document.querySelector("#toggleIconPath"),
   errorMessage: document.querySelector("#errorMessage"),
   uptime: document.querySelector("#uptime"),
   segmentCount: document.querySelector("#segmentCount"),
@@ -82,10 +80,6 @@ const elements = {
 
 for (const element of [
   elements.connectionText,
-  elements.stateLabel,
-  elements.listenerTitle,
-  elements.stateHint,
-  elements.toggleButton,
   elements.privacyTitle,
   elements.privacyText,
   elements.voiceStateLabel,
@@ -192,14 +186,10 @@ function updateStatus(status) {
   elements.listenerPanel.classList.toggle("is-running", running);
   elements.toggleButton.classList.toggle("is-running", running);
   elements.toggleButton.disabled = stopping || requestPending;
-  elements.toggleButton.textContent = running ? t("action.stopListening") : stopping ? t("action.stopping") : t("action.startListening");
-  elements.stateLabel.textContent = running ? t("state.onAir") : stopping ? t("state.stopping") : t("state.standby");
-  elements.listenerTitle.textContent = running ? t("listener.runningTitle") : stopping ? t("listener.stoppingTitle") : t("listener.idleTitle");
-  elements.stateHint.textContent = running
-    ? t("listener.runningHint")
-    : stopping
-      ? t("listener.stoppingHint")
-      : t("listener.idleHint");
+  const actionLabel = t(running ? "action.stopListening" : stopping ? "action.stopping" : "action.startListening");
+  elements.toggleButton.setAttribute("aria-label", actionLabel);
+  elements.toggleButton.title = actionLabel;
+  elements.toggleIconPath.setAttribute("d", running || stopping ? "M6 6h12v12H6z" : "M8 5v14l11-7z");
   elements.segmentCount.textContent = status.segmentCount || 0;
   elements.droppedChunks.textContent = status.droppedChunks || 0;
   if (!running && stopping === false) elements.uptime.textContent = "00:00:00";
@@ -716,8 +706,8 @@ async function loadMarkdown(scrollToStart = false) {
     if (request !== previewRequest) return false;
     currentParagraphs = paragraphData.data || [];
     renderTopics(currentParagraphs);
-    // renderMarkdown escapes every text fragment before inserting its fixed tags.
-    elements.markdownPreview.innerHTML = renderMarkdown(source);
+    // renderTranscriptPreview escapes every text fragment before inserting its fixed tags.
+    elements.markdownPreview.innerHTML = renderTranscriptPreview(source);
     linkifyPreviewSpeakers();
     addParagraphCorrectionButtons(paragraphData.data || []);
     if (scrollToStart) {

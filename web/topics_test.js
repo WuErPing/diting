@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { groupTopics, topicGroupOpen } = require("./topics.js");
-const { renderInline, renderMarkdown } = require("./markdown.js");
+const { renderInline, renderMarkdown, renderTranscriptPreview } = require("./markdown.js");
 
 test("topics form an ordered two-level tree and exclude low-value paragraphs", () => {
   const paragraphs = [
@@ -69,6 +69,15 @@ test("inline Markdown emphasizes concise summaries without allowing raw HTML", (
     renderInline("确定 **周五** 发布 `v1` <script>alert(1)</script>"),
     "确定 <strong>周五</strong> 发布 <code>v1</code> &lt;script&gt;alert(1)&lt;/script&gt;",
   );
+});
+
+test("transcript preview omits the duplicate document header and export metadata", () => {
+  const source = "# 谛听转录\n\n> 2026-11-23 21:13 至 2026-11-24 12:22 · 共 1567 条，此处显示最近 500 条 · 导出于 2026-11-24 12:34:56\n\n## 2026-11-24\n\n- **12:00:00** · 说话人1 · 内容";
+  assert.equal(
+    renderTranscriptPreview(source),
+    "<h2>2026-11-24</h2><ul><li><strong>12:00:00</strong> · 说话人1 · 内容</li></ul>",
+  );
+  assert.equal(renderTranscriptPreview("# 谛听转录\n\n> 暂无记录。\n"), "<blockquote><p>暂无记录。</p></blockquote>");
 });
 
 test("block Markdown remains available to the existing transcript preview", () => {

@@ -40,9 +40,11 @@ button:focus-visible, a:focus-visible, audio:focus-visible {
 .masthead {
   min-height: 112px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
+  padding: 16px 0;
   border-bottom: 1px solid var(--line);
 }
 .identity { display: flex; align-items: center; gap: 16px; min-width: 0; }
@@ -116,7 +118,7 @@ h1 {
   font-size: 13px;
   white-space: nowrap;
 }
-.connection-dot, .status-dot {
+.connection-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -144,33 +146,29 @@ h1 {
   scrollbar-width: thin;
 }
 .listener-panel {
-  padding: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
   border: 1px solid var(--line);
   border-top: 2px solid var(--signal);
   border-radius: var(--radius);
   background: var(--surface);
 }
-.on-air {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-  color: var(--signal);
-  font-family: var(--utility);
-  font-size: 11px;
-  letter-spacing: .12em;
-}
-.listener-panel.is-running .status-dot {
+.listener-panel .voice-state { flex: none; margin-left: 0; padding-left: 0; border-left: 0; }
+.listener-panel .listener-toggle {
+  width: 40px;
+  height: 40px;
+  border-color: var(--signal);
+  border-radius: var(--radius);
   background: var(--signal);
-  animation: breathe 2s ease-in-out infinite;
+  color: var(--signal-ink);
 }
-.listener-panel h2 {
-  margin-bottom: 6px;
-  font-family: var(--display);
-  font-size: 26px;
-  font-weight: 500;
-}
-.state-hint { min-height: 44px; margin-bottom: 16px; color: var(--muted); font-size: 13px; }
+.listener-panel .listener-toggle:hover:not(:disabled) { border-color: var(--ink); background: var(--ink); color: var(--signal-ink); }
+.listener-panel .listener-toggle.is-running { background: transparent; color: var(--signal); }
+.listener-panel .listener-toggle.is-running:hover:not(:disabled) { background: var(--signal); color: var(--signal-ink); }
+.listener-panel .error-message { flex-basis: 100%; margin: 0; }
 .primary-button {
   width: 100%;
   min-height: 48px;
@@ -765,6 +763,21 @@ footer {
 @keyframes voice-wait { 50% { opacity: .4; transform: scaleY(.55); } }
 @keyframes voice-speaking { 50% { transform: scaleY(.35); } }
 
+@media (min-width: 1181px) {
+  .home-shell { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+  .home-shell .masthead, .home-shell footer { flex: none; }
+  .home-shell .console { flex: 1; min-height: 0; align-items: stretch; }
+  .home-shell .control-column { position: static; max-height: none; min-height: 0; }
+  .home-shell .control-column > * { flex: none; }
+  .home-shell .transcript-panel { display: flex; min-height: 0; }
+  .home-shell .preview-panel { flex: 1; height: auto; min-height: 0; max-height: none; }
+  .home-shell .topics-panel { position: static; align-self: stretch; max-height: none; min-height: 0; }
+}
+
+@media (max-width: 1400px) {
+  .masthead > .listener-panel { order: 3; margin: 0 auto; }
+}
+
 @media (max-width: 1180px) {
   .console, .console.is-preview-hidden { grid-template-columns: 240px minmax(0, 1fr); gap: 20px; }
   .topics-panel { grid-column: 1 / -1; position: static; max-height: none; }
@@ -787,8 +800,6 @@ footer {
     max-height: none;
     overflow: visible;
   }
-  .listener-panel { grid-column: 1 / -1; }
-  .state-hint { min-height: auto; }
   .topics-panel { order: 3; }
   .preview-panel { height: 64vh; min-height: 420px; max-height: 640px; }
 }
@@ -800,6 +811,7 @@ footer {
   .language-control > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   .language-control select { min-height: 30px; font-size: 11px; }
   .identity { gap: 12px; }
+  .masthead > .listener-panel { max-width: 100%; gap: 12px; }
   .voice-state { gap: 0; margin-left: 0; padding-left: 8px; }
   .voice-state-bars { gap: 2px; }
   .voice-state-bars > span { width: 2px; }

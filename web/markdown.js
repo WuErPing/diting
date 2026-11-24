@@ -113,5 +113,13 @@
     return html;
   }
 
-  return { renderInline, renderMarkdown };
+  function renderTranscriptPreview(source) {
+    const previewSource = source
+      .replace(/\r\n/g, "\n")
+      .replace(/^# [^\n]*\n*/, "")
+      .replace(/^> \d{4}-\d{2}-\d{2} \d{2}:\d{2} [^\n]*\n*/, "");
+    return renderMarkdown(previewSource);
+  }
+
+  return { renderInline, renderMarkdown, renderTranscriptPreview };
 });
