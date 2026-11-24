@@ -138,6 +138,19 @@ test("voiceprint configuration explains samples and speaker changes in both loca
   assert.equal(i18n.t("voiceprints.saved"), "说话人设置已保存");
 });
 
+test("long transcript previews have a localized jump-to-bottom control", () => {
+  const index = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+  const app = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
+  assert.match(index, /id="jumpBottomButton"[^>]*data-i18n="preview.jumpBottom"[^>]*hidden/);
+  assert.match(app, /markdownScroll\.addEventListener\("scroll", updateJumpBottomVisibility/);
+  assert.match(app, /jumpBottomButton\.addEventListener\("click"/);
+
+  const i18n = createI18n({ storage: null, languages: ["en-US"] });
+  assert.equal(i18n.t("preview.jumpBottom"), "Jump to Bottom");
+  i18n.setLocale("zh");
+  assert.equal(i18n.t("preview.jumpBottom"), "跳到底部");
+});
+
 test("both locales define exactly the same translation keys", () => {
   assert.deepEqual(Object.keys(messages.zh).sort(), Object.keys(messages.en).sort());
 });

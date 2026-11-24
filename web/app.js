@@ -29,6 +29,7 @@ const elements = {
   previewNote: document.querySelector("#previewNote"),
   markdownDownload: document.querySelector("#markdownDownload"),
   markdownScroll: document.querySelector("#markdownScroll"),
+  jumpBottomButton: document.querySelector("#jumpBottomButton"),
   markdownPreview: document.querySelector("#markdownPreview"),
   markdownLive: document.querySelector("#markdownLive"),
   markdownLiveText: document.querySelector("#markdownLiveText"),
@@ -669,10 +670,17 @@ function updateMarkdownDownload() {
   elements.markdownDownload.href = `/api/markdown?download=1&lang=${i18n.locale}`;
 }
 
+function updateJumpBottomVisibility() {
+  const scroll = elements.markdownScroll;
+  const remaining = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
+  elements.jumpBottomButton.hidden = !previewVisible || scroll.scrollHeight <= scroll.clientHeight || remaining < 120;
+}
+
 function applyPreviewVisibility(scrollToStart = false) {
   elements.console.classList.toggle("is-preview-hidden", !previewVisible);
   elements.previewPanel.hidden = !previewVisible;
   elements.showPreviewButton.hidden = previewVisible;
+  updateJumpBottomVisibility();
   return loadMarkdown(scrollToStart);
 }
 
@@ -726,6 +734,7 @@ async function loadMarkdown(scrollToStart = false) {
     } else {
       scroll.scrollTop = previousTop;
     }
+    updateJumpBottomVisibility();
     previewLoaded = true;
     if (!correctingPreview && !retranscribingPreview && !summarizingPreview && !classifyingDay) {
       elements.previewNote.textContent = selectedDay
@@ -737,6 +746,7 @@ async function loadMarkdown(scrollToStart = false) {
   } catch (error) {
     if (request !== previewRequest) return false;
     elements.markdownPreview.textContent = t("preview.loadFailed", { message: error.message });
+    updateJumpBottomVisibility();
     return false;
   }
 }
@@ -1030,11 +1040,13 @@ function updateLivePreview(interim) {
   if (previewVisible && nearBottom) {
     scroll.scrollTop = scroll.scrollHeight;
   }
+  updateJumpBottomVisibility();
 }
 
 function hideLivePreview() {
   elements.markdownLive.hidden = true;
   elements.markdownLiveText.textContent = "";
+  updateJumpBottomVisibility();
 }
 
 function schedulePreviewRefresh() {
@@ -1157,6 +1169,11 @@ i18n.subscribe(() => {
 });
 
 elements.toggleButton.addEventListener("click", toggleCapture);
+elements.markdownScroll.addEventListener("scroll", updateJumpBottomVisibility, { passive: true });
+elements.jumpBottomButton.addEventListener("click", () => {
+  elements.markdownScroll.scrollTo({ top: elements.markdownScroll.scrollHeight, behavior: "smooth" });
+});
+window.addEventListener("resize", updateJumpBottomVisibility);
 elements.calendarPrev.addEventListener("click", () => {
   const hadSelection = Boolean(selectedDay);
   calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() - 1, 1);
