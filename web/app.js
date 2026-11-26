@@ -2,7 +2,7 @@
 
 const i18n = window.DitingI18n;
 const { groupTopics, topicGroupOpen } = window.DitingTopics;
-const { renderMarkdown, renderTranscriptPreview } = window.DitingMarkdown;
+const { renderMarkdown, renderTranscriptPreview, transcriptParagraphHidden } = window.DitingMarkdown;
 const { voicePresentation } = window.DitingVoiceState;
 const t = (key, variables) => i18n.t(key, variables);
 
@@ -35,6 +35,7 @@ const elements = {
   markdownLiveText: document.querySelector("#markdownLiveText"),
   showPreviewButton: document.querySelector("#showPreviewButton"),
   hidePreviewButton: document.querySelector("#hidePreviewButton"),
+  toggleFillersButton: document.querySelector("#toggleFillersButton"),
   topicList: document.querySelector("#topicList"),
   topicsEmpty: document.querySelector("#topicsEmpty"),
   calendarPrev: document.querySelector("#calendarPrev"),
@@ -110,8 +111,10 @@ const expandedTopicCategories = new Set();
 let archiveStats = { audioFiles: 0, audioBytes: 0, transcriptChars: 0 };
 
 const previewStorageKey = "diting.previewVisible";
+const fillersStorageKey = "diting.showFillers";
 const previewLimit = 500;
 let previewVisible = readPreviewPreference();
+let showFillers = readFillerPreference();
 let previewLoaded = false;
 let previewTimer;
 let previewRequest = 0;
@@ -137,6 +140,22 @@ function readPreviewPreference() {
 function savePreviewPreference(visible) {
   try {
     localStorage.setItem(previewStorageKey, String(visible));
+  } catch {
+    // Storage can be unavailable; the toggle still works for this session.
+  }
+}
+
+function readFillerPreference() {
+  try {
+    return localStorage.getItem(fillersStorageKey) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function saveFillerPreference(visible) {
+  try {
+    localStorage.setItem(fillersStorageKey, String(visible));
   } catch {
     // Storage can be unavailable; the toggle still works for this session.
   }
@@ -676,6 +695,19 @@ function updateJumpBottomVisibility() {
   elements.jumpBottomButton.hidden = !previewVisible || scroll.scrollHeight <= scroll.clientHeight || remaining < 120;
 }
 
+function applyFillerVisibility() {
+  for (const item of elements.markdownPreview.querySelectorAll("li[data-filler-only]")) {
+    const hidden = transcriptParagraphHidden({ fillerOnly: item.dataset.fillerOnly === "true" }, showFillers);
+    item.hidden = hidden;
+    const digest = item.nextElementSibling ? null : item.parentElement?.nextElementSibling;
+    if (digest?.tagName === "BLOCKQUOTE") digest.hidden = hidden;
+  }
+  elements.toggleFillersButton.textContent = t(showFillers ? "preview.hideFillers" : "preview.showFillers");
+  elements.toggleFillersButton.setAttribute("aria-pressed", String(showFillers));
+  elements.toggleFillersButton.title = t("preview.fillersTitle");
+  updateJumpBottomVisibility();
+}
+
 function applyPreviewVisibility(scrollToStart = false) {
   elements.console.classList.toggle("is-preview-hidden", !previewVisible);
   elements.previewPanel.hidden = !previewVisible;
@@ -718,6 +750,7 @@ async function loadMarkdown(scrollToStart = false) {
     elements.markdownPreview.innerHTML = renderTranscriptPreview(source);
     linkifyPreviewSpeakers();
     addParagraphCorrectionButtons(paragraphData.data || []);
+    applyFillerVisibility();
     if (scrollToStart) {
       scroll.scrollTop = 0;
       requestAnimationFrame(() => {
@@ -841,7 +874,6 @@ function renderTopics(paragraphs) {
 }
 
 function addParagraphCorrectionButtons(paragraphs) {
-  if (!paragraphCorrectionAvailable) return;
   const byTimeRange = new Map();
   for (const paragraph of paragraphs) {
     const start = paragraphTime(paragraph.startedAt);
@@ -857,7 +889,9 @@ function addParagraphCorrectionButtons(paragraphs) {
     if (!paragraph) continue;
     item.id = `paragraph-${paragraph.id}`;
     item.dataset.paragraphId = paragraph.id;
+    item.dataset.fillerOnly = String(paragraph.fillerOnly === true);
     item.tabIndex = -1;
+    if (!paragraphCorrectionAvailable) continue;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "md-correct";
@@ -874,15 +908,18 @@ function addParagraphCorrectionButtons(paragraphs) {
     asrButton.disabled = correctingPreview || retranscribingPreview || summarizingPreview || classifyingDay;
     asrButton.title = t("paragraph.asrTitle");
     asrButton.setAttribute("aria-label", t("paragraph.asrLabel", { time: strong.textContent }));
-    const summaryButton = document.createElement("button");
-    summaryButton.type = "button";
-    summaryButton.className = "md-summary";
-    summaryButton.dataset.paragraphId = paragraph.id;
-    summaryButton.textContent = t("paragraph.summary");
-    summaryButton.disabled = correctingPreview || retranscribingPreview || summarizingPreview || classifyingDay;
-    summaryButton.title = t("paragraph.summaryTitle");
-    summaryButton.setAttribute("aria-label", t("paragraph.summaryLabel", { time: strong.textContent }));
-    item.append(" ", button, " ", asrButton, " ", summaryButton);
+    item.append(" ", button, " ", asrButton);
+    if (!paragraph.fillerOnly) {
+      const summaryButton = document.createElement("button");
+      summaryButton.type = "button";
+      summaryButton.className = "md-summary";
+      summaryButton.dataset.paragraphId = paragraph.id;
+      summaryButton.textContent = t("paragraph.summary");
+      summaryButton.disabled = correctingPreview || retranscribingPreview || summarizingPreview || classifyingDay;
+      summaryButton.title = t("paragraph.summaryTitle");
+      summaryButton.setAttribute("aria-label", t("paragraph.summaryLabel", { time: strong.textContent }));
+      item.append(" ", summaryButton);
+    }
   }
 }
 
@@ -1245,6 +1282,11 @@ elements.topicList.addEventListener("click", (event) => {
   event.preventDefault();
   jumpToParagraph(link.dataset.paragraphId);
 });
+elements.toggleFillersButton.addEventListener("click", () => {
+  showFillers = !showFillers;
+  saveFillerPreference(showFillers);
+  applyFillerVisibility();
+});
 elements.hidePreviewButton.addEventListener("click", () => {
   previewVisible = false;
   savePreviewPreference(false);
@@ -1263,6 +1305,7 @@ setInterval(() => {
   }
 }, 1000);
 
+applyFillerVisibility();
 updateMarkdownDownload();
 applyPreviewVisibility();
 renderCalendar();

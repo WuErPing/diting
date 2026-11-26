@@ -779,6 +779,9 @@ components:
           description: 简明总结，可包含行内 Markdown
         hasTopic:
           type: boolean
+        fillerOnly:
+          type: boolean
+          description: 是否仅包含语气词；用于展示过滤，不影响原始转写
     SegmentDeleteResponse:
       type: object
       properties:

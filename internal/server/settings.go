@@ -182,13 +182,14 @@ func (s *Server) handleCorrectParagraphs(w http.ResponseWriter, r *http.Request)
 }
 
 type paragraphMetadata struct {
-	ID        string    `json:"id"`
-	StartedAt time.Time `json:"startedAt"`
-	EndedAt   time.Time `json:"endedAt"`
-	Category  string    `json:"category"`
-	Title     string    `json:"title"`
-	Summary   string    `json:"summary"`
-	HasTopic  bool      `json:"hasTopic"`
+	ID         string    `json:"id"`
+	StartedAt  time.Time `json:"startedAt"`
+	EndedAt    time.Time `json:"endedAt"`
+	Category   string    `json:"category"`
+	Title      string    `json:"title"`
+	Summary    string    `json:"summary"`
+	HasTopic   bool      `json:"hasTopic"`
+	FillerOnly bool      `json:"fillerOnly"`
 }
 
 func (s *Server) handleParagraphs(w http.ResponseWriter, r *http.Request) {
@@ -232,6 +233,7 @@ func (s *Server) handleParagraphs(w http.ResponseWriter, r *http.Request) {
 		data = append(data, paragraphMetadata{
 			ID: item.ID, StartedAt: item.StartedAt, EndedAt: item.EndedAt,
 			Category: item.TopicCategory(), Title: item.TopicTitle(), Summary: item.TopicSummary(), HasTopic: item.HasTopic(),
+			FillerOnly: paragraph.IsFillerOnly(item.Text),
 		})
 	}
 	writeJSON(w, http.StatusOK, struct {

@@ -33,6 +33,7 @@
 - **议题组织**：按 15 分钟静音划分大时间段，每个时间段只保留一个大主题，具体差异由小主题承载；主题索引支持层级折叠，默认展开最新分组并保留手动展开状态。
 - **段落处理**：新语句到达后异步重判当前议题，支持历史回填和失败重试；只合并同一说话人的连续发言，说话人变化时强制拆分；语义修正增加编辑预算，避免模型过度改写原文。
 - **实时界面**：以人声状态动画和文稿内联临时文本取代独立实时转录面板；统一使用小篆风格品牌标志和 favicon。
+- **语气词过滤**：合并文稿默认隐藏纯语气词段落并可一键恢复，按天纪要不再把语气词送入模型；原始转写、录音和 Markdown 下载保持完整。
 - **接口与日志**：完善归档、文稿、段落、设置和说话人接口的查询能力，应用及 worker 日志统一为英文。
 
 #### 修复
@@ -71,6 +72,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Topic organization**: Major time periods split after 15 minutes of silence, with one major topic per period and specific differences retained in minor topics; the topic index supports hierarchical collapsing, expands the latest group by default, and preserves manual expansion state.
 - **Paragraph processing**: The current topic is re-evaluated asynchronously as new utterances arrive, with history backfill and failure retries; only consecutive speech from the same speaker is merged, with forced splits at speaker changes; semantic correction gained an edit budget to prevent the model from over-rewriting the original text.
 - **Real-time interface**: A voice-state animation and inline interim text in the transcript replace the separate live transcription panel; a unified seal-script brand logo and favicon.
+- **Filler filtering**: The merged transcript hides filler-only paragraphs by default with a one-click restore, and daily minutes no longer send filler utterances to the model; original transcripts, recordings, and Markdown downloads remain complete.
 - **APIs and logging**: Improved query capabilities for archive, transcript, paragraph, settings, and speaker endpoints; application and worker logs standardized in English.
 
 #### Fixed

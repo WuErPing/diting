@@ -294,6 +294,29 @@ func TestComposeParagraphsExcludesLowValueConversation(t *testing.T) {
 	}
 }
 
+func TestIsFillerOnly(t *testing.T) {
+	cases := []struct {
+		text string
+		want bool
+	}{
+		{"嗯。", true},
+		{"嗯。嗯。嗯嗯。", true},
+		{" 呃… 哦！哎 ", true},
+		{"um, uh... hmm!", true},
+		{"", false},
+		{"……", false},
+		{"（未识别出文字）", false},
+		{"hello", false},
+		{"嗯，我同意", false},
+		{"哈密瓜", false},
+	}
+	for _, tc := range cases {
+		if got := IsFillerOnly(tc.text); got != tc.want {
+			t.Errorf("IsFillerOnly(%q) = %v, want %v", tc.text, got, tc.want)
+		}
+	}
+}
+
 func TestParagraphHasTopic(t *testing.T) {
 	cases := []struct {
 		text string

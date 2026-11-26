@@ -113,6 +113,10 @@
     return html;
   }
 
+  function transcriptParagraphHidden(paragraph, showFillers) {
+    return !showFillers && paragraph.fillerOnly === true;
+  }
+
   function renderTranscriptPreview(source) {
     const previewSource = source
       .replace(/\r\n/g, "\n")
@@ -121,5 +125,5 @@
     return renderMarkdown(previewSource);
   }
 
-  return { renderInline, renderMarkdown, renderTranscriptPreview };
+  return { renderInline, renderMarkdown, renderTranscriptPreview, transcriptParagraphHidden };
 });

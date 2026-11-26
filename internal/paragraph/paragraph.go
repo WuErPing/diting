@@ -69,6 +69,47 @@ func (p Paragraph) TopicSummary() string {
 	return topicSummary(p.Summary, p.Text)
 }
 
+// IsFillerOnly reports whether text contains only non-lexical backchanneling.
+func IsFillerOnly(text string) bool {
+	text = compactTopicText(text)
+	if text == "" || text == "（未识别出文字）" || text == "(未识别出文字)" {
+		return false
+	}
+	var plain strings.Builder
+	for _, r := range text {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			plain.WriteRune(r)
+		}
+	}
+	normalized := strings.ToLower(plain.String())
+	if normalized == "" || normalized == "未识别出文字" {
+		return false
+	}
+	chineseFiller := true
+	for _, r := range normalized {
+		if !strings.ContainsRune("嗯啊呃哦噢哎唉诶欸嘿哈喂", r) {
+			chineseFiller = false
+			break
+		}
+	}
+	if chineseFiller {
+		return true
+	}
+	words := strings.Fields(text)
+	englishFiller := len(words) > 0
+	for _, word := range words {
+		word = strings.ToLower(strings.TrimFunc(word, func(r rune) bool {
+			return !unicode.IsLetter(r)
+		}))
+		switch word {
+		case "um", "umm", "uh", "uhh", "hm", "hmm", "hmmm", "er", "err", "ah", "oh":
+		default:
+			englishFiller = false
+		}
+	}
+	return englishFiller
+}
+
 func hasTopicText(text string) bool {
 	text = compactTopicText(text)
 	if text == "" || text == "（未识别出文字）" || text == "(未识别出文字)" {

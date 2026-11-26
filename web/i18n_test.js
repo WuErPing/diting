@@ -151,6 +151,18 @@ test("long transcript previews have a localized jump-to-bottom control", () => {
   assert.equal(i18n.t("preview.jumpBottom"), "跳到底部");
 });
 
+test("filler-only transcript filtering has an accessible localized toggle", () => {
+  const index = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
+  assert.match(index, /id="toggleFillersButton"[^>]*aria-pressed="false"/);
+
+  const i18n = createI18n({ storage: null, languages: ["en-US"] });
+  assert.equal(i18n.t("preview.showFillers"), "Show filler utterances");
+  assert.equal(i18n.t("preview.hideFillers"), "Hide filler utterances");
+  i18n.setLocale("zh");
+  assert.equal(i18n.t("preview.showFillers"), "显示语气词");
+  assert.equal(i18n.t("preview.hideFillers"), "隐藏语气词");
+});
+
 test("both locales define exactly the same translation keys", () => {
   assert.deepEqual(Object.keys(messages.zh).sort(), Object.keys(messages.en).sort());
 });

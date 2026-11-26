@@ -780,6 +780,9 @@ components:
           description: Concise summary, may contain inline Markdown
         hasTopic:
           type: boolean
+        fillerOnly:
+          type: boolean
+          description: Whether the paragraph contains only filler utterances; intended for display filtering without changing transcripts
     SegmentDeleteResponse:
       type: object
       properties:

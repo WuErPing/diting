@@ -39,7 +39,7 @@ func (w *Worker) SummarizeDay(ctx context.Context, date string) (DayMinutesResul
 	var transcript strings.Builder
 	for _, segment := range segments {
 		text := strings.TrimSpace(segment.Text)
-		if segment.StartedAt.Local().Format("2006-01-02") != date || text == "" {
+		if segment.StartedAt.Local().Format("2006-01-02") != date || text == "" || IsFillerOnly(text) {
 			continue
 		}
 		fmt.Fprintf(&transcript, "[%s] ", segment.StartedAt.Local().Format("15:04:05"))
